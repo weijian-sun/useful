@@ -1,0 +1,435 @@
+#include <cuda_runtime_api.h>
+#include <Eigen/Eigen>
+#include <pcl/point_cloud.h>
+
+// #include "utils.h"
+
+#define CUDA_PI 3.141592654
+
+__device__ void euler2rotation(const float rpy[3], float rot[9]) {
+    float cr = cos(rpy[0]); // * CUDA_PI / 180.);
+    float sr = sin(rpy[0]); // * CUDA_PI / 180.);
+    float cp = cos(rpy[1]); // * CUDA_PI / 180.);
+    float sp = sin(rpy[1]); // * CUDA_PI / 180.);
+    float cy = cos(rpy[2]); // * CUDA_PI / 180.);
+    float sy = sin(rpy[2]); // * CUDA_PI / 180.);
+    rot[0] = cy*cp;
+    rot[1] = cy*sp*sr-sy*cr;
+    rot[2] = cy*sp*cr+sy*sr;
+    rot[3] = sy*cp;
+    rot[4] = sy*sp*sr+cy*cr;
+    rot[5] = sy*sp*cr-cy*sr;
+    rot[6] = -sp;
+    rot[7] = cp*sr;
+    rot[8] = cp*cr;
+}
+
+__device__ void edge_weight_count(unsigned char* img, int width, int height, float* pc, int nr_pc, 
+        float* pm, float* rpyxyz, int* weight) {
+    float rot[9];
+    euler2rotation(rpyxyz, rot);
+    *weight = 0;
+
+    /* printf("rpyxyz: %f, %f, %f, %f, %f, %f\n", rpyxyz[0] / CUDA_PI * 180.0, rpyxyz[1] / CUDA_PI * 180.0, rpyxyz[2] / CUDA_PI * 180.0, rpyxyz[3], rpyxyz[4], rpyxyz[5]); */
+    // printf("pm: %f, %f, %f, %f, %f, %f, %f, %f, %f\n", pm[0], pm[1], pm[2], pm[3], pm[4], pm[5], pm[6], pm[7], pm[8]);
+    for (int i = 0; i < nr_pc; ++i) {
+        float x = rot[0] * pc[i * 3] + rot[1] * pc[i * 3 + 1] + rot[2] * pc[i * 3 + 2] + rpyxyz[3];
+        float y = rot[3] * pc[i * 3] + rot[4] * pc[i * 3 + 1] + rot[5] * pc[i * 3 + 2] + rpyxyz[4];
+        float z = rot[6] * pc[i * 3] + rot[7] * pc[i * 3 + 1] + rot[8] * pc[i * 3 + 2] + rpyxyz[5];
+        // printf("x: %f, y: %f, z: %f\n", x, y, z);
+        if (z > 0) {
+	        float w = pm[6] * x + pm[7] * y + pm[8] * z;
+	        int px = int((pm[0] * x + pm[1] * y + pm[2] * z) / w);
+	        int py = int((pm[3] * x + pm[4] * y + pm[5] * z) / w);
+            // printf("i: %d, x: %f, y: %f, z: %f, px: %d, py: %d, w: %f\n", i, x, y, z, px, py, w);
+            if (px >= 0 && px < width && py >= 0 && py < height) {
+                *weight += (int)img[py * width + px];
+                // printf("px: %d, py: %d, gray: %d", px, py, img[py * width + px]);
+            }
+            
+        }
+    }
+    //printf("weight: %d \n", *weight);
+
+} 
+
+
+
+struct pair
+{
+    int val;
+    int id;
+};
+typedef struct pair pair;
+
+__global__ void shmem_reduce_kernel(struct pair * d_out, struct pair * d_in, int array_size)
+{
+    // sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
+    extern __shared__ pair sdata[];
+
+    int myId = threadIdx.x + blockDim.x * blockIdx.x;
+    int tid  = threadIdx.x;
+
+    // load shared mem from global mem
+    if(myId>=array_size)
+    sdata[tid].val = 0, sdata[tid].id = -1;
+    else
+    sdata[tid] = d_in[myId];
+
+    __syncthreads();            // make sure entire block is loaded!
+
+    // do reduction in shared mem
+    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s)
+        {
+            if(sdata[tid + s].val > sdata[tid].val)
+            sdata[tid] = sdata[tid + s];
+        }
+        __syncthreads();        // make sure all adds at one stage are done!
+    }
+
+    // only thread 0 writes result for this block back to global mem
+    if (tid == 0)
+    {
+        d_out[blockIdx.x] = sdata[0];
+    }
+}
+
+
+
+
+__global__ void do_search(unsigned char* d_img, int width, int height, float* d_pc, int nr_pc, float* d_pm, 
+        float* d_rpyxyz, float* search_rpyxyz, float* d_step_rt, pair* d_weight) {
+
+    printf("99999999999999999999999999999999999\n");
+
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    int ro_grid = 2 * search_rpyxyz[0] / d_step_rt[0] + 1;
+    int pi_grid = 2 * search_rpyxyz[1] / d_step_rt[0] + 1;
+    int ya_grid = 2 * search_rpyxyz[2] / d_step_rt[0] + 1;
+    int x_grid = 2 * search_rpyxyz[3] / d_step_rt[1] + 1;
+    int y_grid = 2 * search_rpyxyz[4] / d_step_rt[1] + 1;
+    int z_grid = 2 * search_rpyxyz[5] / d_step_rt[1] + 1;
+
+    int id_ya = index % ya_grid;
+    int id_pi = index / ya_grid % pi_grid;
+    int id_ro = index / ya_grid / pi_grid % ro_grid;
+    int id_z = index / ya_grid / pi_grid / ro_grid % z_grid;
+    int id_y = index / ya_grid / pi_grid / ro_grid / z_grid % y_grid;
+    int id_x = index / ya_grid / pi_grid / ro_grid / z_grid / y_grid % x_grid;
+
+    float rpyxyz[6] = {(d_rpyxyz[0] + -search_rpyxyz[0] + d_step_rt[0] * id_ro) * CUDA_PI / 180., 
+                       (d_rpyxyz[1] + -search_rpyxyz[1] + d_step_rt[0] * id_pi) * CUDA_PI / 180.,
+                       (d_rpyxyz[2] + -search_rpyxyz[2] + d_step_rt[0] * id_ya) * CUDA_PI / 180., 
+                       d_rpyxyz[3] - search_rpyxyz[3] + d_step_rt[1] * id_x,
+                       d_rpyxyz[4] - search_rpyxyz[4] + d_step_rt[1] * id_y, 
+                       d_rpyxyz[5] - search_rpyxyz[5] + d_step_rt[1] * id_z};
+    int weight = 0;
+    /* printf("%f, %f, %f\n", rpyxyz[0] / CUDA_PI * 180.0, rpyxyz[1] / CUDA_PI * 180.0, rpyxyz[2] / CUDA_PI * 180.0); */
+
+    edge_weight_count(d_img, width, height, d_pc, nr_pc, d_pm, rpyxyz, &weight);
+    // printf("weight: %d \n", weight);
+    /* printf("index: %d, weight: %d, rpyxyz: %d, %d, %d, %d, %d, %d\n",index, */
+    /*         weight, id_ro, id_pi, id_ya, id_x, id_y, id_z); */
+
+    d_weight[index].val = weight, d_weight[index].id = index;
+    /* printf("grid: %d, %d, %d, %d, %d, %d\n", ro_grid, pi_grid, ya_grid, x_grid, */
+    /*         y_grid, z_grid); */
+    /* printf("index: %d, weight: %d\n", index, weight); */
+
+}
+
+void greed_search_cu(const unsigned char* img, int width, int height, const float* pc, int nr_pc, 
+        const float* pm, float* init_rpyxyz, float* search_rpyxyz, float*
+        step_rt, float* best_rpyxyz) {
+
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    cudaError_t cuda_error;
+    int deviceCount = -1; 
+    cuda_error = cudaGetDeviceCount(&deviceCount); 
+    if (cuda_error != cudaSuccess) {printf("get GPU device count failed\n"); return;}
+    printf("deviceCount: %d \n", deviceCount);
+
+    cudaSetDevice(0);
+    cudaDeviceProp device_properties;
+    cuda_error = cudaGetDeviceProperties(&device_properties, 0);
+    if (cuda_error != cudaSuccess) {printf("get GPU device_properties failed\n"); return;}
+
+    /// copy img
+    unsigned char* d_img;
+    cuda_error = cudaMalloc((void**)&d_img, width * height * sizeof(unsigned char));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMemcpy(d_img, img, width * height * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) {printf("cudaMemcpy failed\n"); return;}
+
+    /// copy pointcloud
+    float* d_pc;
+    cuda_error = cudaMalloc((void**)&d_pc, nr_pc * 3 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMemcpy(d_pc, pc, nr_pc * 3 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+
+    /// copy progection_matrix
+    float* d_pm;
+    cuda_error = cudaMalloc((void**)&d_pm, 9 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMemcpy(d_pm, pm, 9 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+
+    int ro_grid = 2 * search_rpyxyz[0] / step_rt[0] + 1;
+    int pi_grid = 2 * search_rpyxyz[1] / step_rt[0] + 1;
+    int ya_grid = 2 * search_rpyxyz[2] / step_rt[0] + 1;
+    int x_grid = 2 * search_rpyxyz[3] / step_rt[1] + 1;
+    int y_grid = 2 * search_rpyxyz[4] / step_rt[1] + 1;
+    int z_grid = 2 * search_rpyxyz[5] / step_rt[1] + 1;
+    long long loop_num = x_grid * y_grid * z_grid * ro_grid * pi_grid * ya_grid;
+
+
+//*****************************************************************************
+    printf("**********\n");
+    printf("**********\n");
+    printf("**********\n");
+
+    int max_thread = 1e9;
+    /* int max_thread = 1300; */
+    int loop = 5;
+    int agre = 1;
+    int grid[6];
+    grid[0] = ro_grid, grid[1] = pi_grid, grid[2] = ya_grid, grid[3] = x_grid, grid[4] = y_grid, grid[5] = z_grid;
+    while(loop>=0 && agre * 1.0 < 1.0 * max_thread/grid[loop])
+    {
+        agre *= grid[loop--];
+    }
+    printf("loop: %d \n", loop);
+
+    printf("init_grid: %d, %d, %d, %d, %d, %d\n", grid[0], grid[1], grid[2], grid[3],
+            grid[4], grid[5]);
+
+    int for_grid[6];
+    int thread_grid[6];
+    memcpy(for_grid, grid, sizeof(int)*6);
+    memcpy(thread_grid, grid, sizeof(int)*6);
+
+    loop_num = agre;
+
+    printf("loop_num: %d\n", agre);
+
+    int id = -1;
+    while(++id <= loop)search_rpyxyz[id] = 0, thread_grid[id] = 1;
+    while(++loop<6)for_grid[loop] = 1;
+
+    for(int i=0; i<6; i++)
+    {
+        printf("for_grid: %d, thread_grid: %d\n", for_grid[i], thread_grid[i]);
+    }
+
+
+    printf("search_rpyxyz: %f, %f, %f, %f, %f, %f\n", search_rpyxyz[0],
+            search_rpyxyz[1], search_rpyxyz[2], search_rpyxyz[3],
+            search_rpyxyz[4], search_rpyxyz[5]);
+
+    x_grid = thread_grid[3], y_grid = thread_grid[4], z_grid = thread_grid[5],
+    ro_grid = thread_grid[0],pi_grid = thread_grid[1], ya_grid = thread_grid[2];
+
+
+    pair* d_weight;
+    cuda_error = cudaMalloc((void**)&d_weight, loop_num * sizeof(pair));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    float* d_search_rpyxyz;
+    float* d_step_rt;
+    float* d_rpyxyz;
+    cuda_error = cudaMalloc((void**)&d_search_rpyxyz, 6 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMalloc((void**)&d_step_rt, 2 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    /* cuda_error = cudaMalloc((void**)&d_rpyxyz, 6 * sizeof(float)); */
+    /* if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;} */
+    cuda_error = cudaMemcpy(d_search_rpyxyz, search_rpyxyz, 6 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+    cuda_error = cudaMemcpy(d_step_rt, step_rt, 2 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+    /* cuda_error = cudaMemcpy(d_rpyxyz, init_rpyxyz, 6 * sizeof(float), cudaMemcpyHostToDevice); */
+    /* if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;} */
+
+
+
+    int max_weight = 0;
+    float block_rpyxyz[6];
+    int total_cuda_process = (for_grid[0 ] ) * (for_grid[1] ) *
+    (for_grid[2]) * (for_grid[3] ) * (for_grid[4]) * (for_grid[5]);
+    int cuda_process = 0;
+
+
+    for(int a = -for_grid[3]/2; a <= for_grid[3]/2; a ++) //x
+    for(int b = -for_grid[4]/2; b <= for_grid[4]/2; b ++) //y
+    for(int c = -for_grid[5]/2; c <= for_grid[5]/2; c ++) //z
+    for(int d = -for_grid[0]/2; d <= for_grid[0]/2; d ++) //ro
+    for(int e = -for_grid[1]/2; e <= for_grid[1]/2; e ++) //pi
+    for(int f = -for_grid[2]/2; f <= for_grid[2]/2; f ++) //ya
+    {
+
+    std::cout<<"############################################################################"<<std::endl;
+
+    printf("cuda_process: %d / %d \n", ++cuda_process, total_cuda_process);
+
+    std::cout<<"abcdef: "<<a<<" "<<b<<" "<<c<<" "<<d<<" "<<e<<" "<<f<<std::endl;
+
+    block_rpyxyz [3] = init_rpyxyz[3] + a * step_rt[1]; //x
+    block_rpyxyz [4] = init_rpyxyz[4] + b * step_rt[1]; //y
+    block_rpyxyz [5] = init_rpyxyz[5] + c * step_rt[1]; //z
+    block_rpyxyz [0] = (init_rpyxyz[0] + d * step_rt[0]); //* CUDA_PI / 180.0; //ro
+    block_rpyxyz [1] = (init_rpyxyz[1] + e * step_rt[0]); //* CUDA_PI / 180.0; //pi
+    block_rpyxyz [2] = (init_rpyxyz[2] + f * step_rt[0]); //* CUDA_PI / 180.0; //ya
+
+
+    printf("block init_rpyxyz: %f, %f, %f, %f, %f, %f\n", 
+            block_rpyxyz[0], 
+            block_rpyxyz[1], 
+            block_rpyxyz[2], 
+            block_rpyxyz [3], block_rpyxyz[4], block_rpyxyz [5]);
+
+    cuda_error = cudaMalloc((void**)&d_rpyxyz, 6 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMemcpy(d_rpyxyz, block_rpyxyz, 6 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+
+
+
+    int ThreadPerBlock = ((loop_num > device_properties.maxThreadsPerBlock)?
+        device_properties.maxThreadsPerBlock : loop_num);
+    int nblocks = (loop_num + ThreadPerBlock - 1) / ThreadPerBlock;
+
+    printf("------begin do search! nblocks: %d, ThreadsPerBlock: %d \n", nblocks, ThreadPerBlock);
+    do_search<<<nblocks, ThreadPerBlock>>> (d_img, width, height, d_pc, 
+            nr_pc, d_pm, d_rpyxyz, d_search_rpyxyz, d_step_rt, d_weight);
+
+    cudaDeviceSynchronize();
+    printf("------finish do search\n");
+    /* int* weight; */
+    /* weight = (int*)malloc(loop_num * sizeof(int)); */
+    /* cuda_error = cudaMemcpy(weight, d_weight, loop_num * sizeof(pair), cudaMemcpyDeviceToHost); */
+    /* if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;} */
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    int index_max;
+    bool modified = false;
+    /* printf("loop_num: %d", loop_num); */
+    /* for (int i = 0; i < loop_num; ++i) { */
+    /*     if (max_weight < weight[i]) { */
+    /*         max_weight = weight[i]; */
+    /*         index_max = i; */
+    /*         modified = true; */
+    /*     } */
+    /* } */
+    /* std::cout << "index_max: " << index_max << ", max_weight: " << max_weight << '\n'; */
+
+
+
+
+    int array_size = loop_num;
+    const int maxThreadsPerBlock = 1024;
+    int threads = maxThreadsPerBlock;
+
+    pair  * d_intermediate1, * d_intermediate2, * d_out;
+
+    int array_size_level1 = (array_size + threads - 1) / threads;
+    int array_size_level2 = (array_size_level1 + threads - 1) / threads;
+    int array_size_level3 = (array_size_level2 + threads - 1) / threads;
+
+    std::cout<<"level1 "<<array_size_level1<<std::endl;
+    std::cout<<"level2 "<<array_size_level2<<std::endl;
+    std::cout<<"level3 "<<array_size_level3<<std::endl;
+
+    cudaMalloc((void **) &d_intermediate1, array_size_level1 * sizeof(pair));
+    cudaMalloc((void **) &d_intermediate2, array_size_level2 * sizeof(pair));
+    cudaMalloc((void **) &d_out, array_size_level3 * sizeof(pair));
+
+
+    int blocks0 = (array_size + threads - 1) / threads;
+    int blocks1 = (array_size_level1 + threads -1) / threads;
+    int blocks2 = (array_size_level2 + threads -1) / threads;
+    pair ans;
+
+    {
+        shmem_reduce_kernel<<<blocks0, threads, threads *
+            sizeof(pair)>>>(d_intermediate1, d_weight, array_size);
+
+        pair* temp1;
+        temp1 = (pair*)malloc(array_size_level1 * sizeof(pair));
+        cudaMemcpy(temp1, d_intermediate1, array_size_level1 * sizeof(pair),
+                cudaMemcpyDeviceToHost);
+        /* for(int i = 0; i<array_size_level1; i++)printf("%d %d %d\n", temp1[i].val, temp1[i].id, i); */
+
+        shmem_reduce_kernel<<<blocks1, threads, threads *
+            sizeof(pair)>>>(d_intermediate2, d_intermediate1, array_size_level1);
+
+        pair* temp2;
+        temp2 = (pair*)malloc(array_size_level2 * sizeof(pair));
+        cudaMemcpy(temp2, d_intermediate2, array_size_level2 * sizeof(pair),
+                cudaMemcpyDeviceToHost);
+
+        /* printf("****************************\n"); */
+        /* for(int i=0; i<array_size_level2; i++)printf("%d %d %d\n", temp2[i].val, temp2[i].id, i); */
+        /* printf("-----------------------------\n"); */
+
+        shmem_reduce_kernel<<<blocks2, threads, threads *
+            sizeof(pair)>>>(d_out, d_intermediate2, array_size_level2);
+
+        cudaMemcpy(&ans, d_out, sizeof(pair), cudaMemcpyDeviceToHost);
+        printf("max_cadi id, val:  %d, %d\n", ans.id, ans.val);
+    }
+
+    if(ans.val > max_weight)
+    {
+        max_weight = ans.val;
+        index_max = ans.id;
+        modified = true;
+    }
+
+
+    if(modified)
+    {
+    float id_ya = index_max % ya_grid;
+    float id_pi = index_max / ya_grid % pi_grid;
+    float id_ro = index_max / ya_grid / pi_grid % ro_grid;
+    float id_z = index_max / ya_grid / pi_grid / ro_grid % z_grid;
+    float id_y = index_max / ya_grid / pi_grid / ro_grid / z_grid % y_grid;
+    float id_x = index_max / ya_grid / pi_grid / ro_grid / z_grid / y_grid % x_grid;
+
+    best_rpyxyz[0] = (block_rpyxyz[0] + -search_rpyxyz[0] + step_rt[0] * id_ro) * CUDA_PI / 180.;
+    best_rpyxyz[1] = (block_rpyxyz[1] + -search_rpyxyz[1] + step_rt[0] * id_pi) * CUDA_PI / 180.;
+    best_rpyxyz[2] = (block_rpyxyz[2] + -search_rpyxyz[2] + step_rt[0] * id_ya) * CUDA_PI / 180.;
+    best_rpyxyz[3] = block_rpyxyz[3] -search_rpyxyz[3] + step_rt[1] * id_x;
+    best_rpyxyz[4] = block_rpyxyz[4] -search_rpyxyz[4] + step_rt[1] * id_y;
+    best_rpyxyz[5] = block_rpyxyz[5] -search_rpyxyz[5] + step_rt[1] * id_z;
+
+    std::cout<<std::endl;
+    std::cout<<"!!!!! UPDATING !!!!!"<<std::endl;
+    std::cout<<"rpyxyzgrid: "<<ro_grid<<" "<<pi_grid<<" "<<ya_grid<<" "<<x_grid<<" "<<y_grid<<" "<<z_grid<<std::endl;
+    std::cout<<id_ro<<" "<<id_pi<<" "<<id_ya<<" "<<id_x<<" "<<id_y<<" "<<id_z<<std::endl;
+    std::cout<<best_rpyxyz[0] * 180.0 / CUDA_PI<<" "<<best_rpyxyz[1] * 180.0 / CUDA_PI<<" "<<best_rpyxyz[2] * 180.0 / CUDA_PI<<" "<<best_rpyxyz[3]<<" "<<best_rpyxyz[4]<<" "<<best_rpyxyz[5]<<std::endl;
+    std::cout<<std::endl;
+    }
+
+
+
+    cudaFree(d_rpyxyz);
+    /* free(weight); */
+    cudaFree(d_intermediate1);
+    cudaFree(d_intermediate2);
+    cudaFree(d_out);
+
+    }
+
+    cudaFree(d_img);
+    cudaFree(d_pc);
+    cudaFree(d_pm);
+    cudaFree(d_weight);
+    cudaFree(d_search_rpyxyz);
+    cudaFree(d_step_rt);
+    /* cudaFree(d_rpyxyz); */
+}

@@ -1,0 +1,155 @@
+scriptencoding utf-8
+set encoding=utf-8
+
+imap jj <Esc>
+cmap jj <Esc>
+inoremap <C-e> <Esc>A
+inoremap <C-a> <Esc>I
+
+
+
+
+
+" python from powerline.vim import setup as powerline_setup
+" python powerline_setup()
+" python del powerline_setup
+set rtp+=/usr/local/lib/python2.7/site-packages/Powerline-beta-py2.7.egg/powerline/bindings/vim/
+set t_Co=256
+set laststatus=2   " Always show the statusline "
+
+let g:Powerline_symbols = 'fancy'
+set guifont=DejaVu\ Sans\ Mono\ for\ Powerline:h16
+set nocompatible
+let g:airline_powerline_fonts = 1
+let g:airline_theme = 'powerlineish'
+let g:airline#extensions#tabline#enabled = 1
+
+if !exists('g:airline_symbols')
+  let g:airline_symbols = {}
+endif
+
+if exists('g:Powerline_symbols')
+  let g:airline_left_sep = ''
+  let g:airline_left_alt_sep = ''
+  let g:airline_right_sep = ''
+  let g:airline_right_alt_sep = ''
+  let g:airline_symbols.branch = ''
+  let g:airline_symbols.readonly = ''
+  let g:airline_symbols.linenr = ''
+else
+  let g:airline_left_sep = '|'
+  let g:airline_left_alt_sep = '>'
+  let g:airline_right_sep = '|'
+  let g:airline_right_alt_sep = '<'
+  let g:airline_symbols.branch = '|'
+  let g:airline_symbols.readonly = '*'
+  let g:airline_symbols.linenr = 'L/N'
+endif
+
+
+
+
+
+" eclim
+"let g:EclimCompletionMethod = 'omnifunc'
+
+"set paste
+
+autocmd filetype crontab setlocal nobackup nowritebackup
+
+" set mouse=v
+set number
+
+UnBundle 'jiangmiao/auto-pairs'
+
+" let g:ycm_key_list_select_completion=['<c-n>', '<Down>']
+let g:ycm_key_list_previous_completion=['<c-p>']
+let g:ycm_global_ycm_extra_conf = "~/.ycm_extra_conf.py"
+
+"" Ultisnips
+let g:UltiSnipsExpandTrigger="<c-tab>"
+let g:UltiSnipsListSnippets="<c-s-tab>"
+let g:UltiSnipsJumpForwardTrigger = "<c-f>"
+let g:UltiSnipsJumpBackwardTrigger = "<c-b>"
+
+" Linux Kernel
+let g:linuxsty_patterns = [ "/opt" ]
+
+" cscope
+"
+function! LoadCscope()
+  let db = findfile("cscope.out", ".;")
+  if (!empty(db))
+    let path = strpart(db, 0, match(db, "/cscope.out$"))
+    set nocscopeverbose " suppress 'duplicate connection' error
+    exe "cs add " . db . " " . path
+    set cscopeverbose
+  endif
+endfunction
+au BufEnter /* call LoadCscope()
+
+" 符号
+nmap zs :cs find s <C-R>=expand("<cword>")<CR><CR>
+" 定义
+nmap zg :cs find g <C-R>=expand("<cword>")<CR><CR>
+nmap zi :cs find g <C-R>=expand("<cword>")<CR><CR>
+" 本函数调用的函数
+nmap zd :cs find d <C-R>=expand("<cword>")<CR><CR>
+" 调用本函数的函数
+nmap zD :cs find c <C-R>=expand("<cword>")<CR><CR>
+" 字符串
+nmap zt :cs find t <C-R>=expand("<cword>")<CR><CR>
+" egrep
+nmap ze :cs find e <C-R>=expand("<cword>")<CR><CR>
+" 本文件
+nmap zf :cs find f <C-R>=expand("<cfile>")<CR><CR>
+" 包含本文件的文件
+"nmap zi :cs find i ^<C-R>=expand("<cfile>")<CR>$<CR>
+
+" 代码折叠
+" set fdm=syntax
+" :nnoremap <space> za
+
+" c++ indentation
+set cindent
+set cino=N-s,g0,t0
+
+" c++ std tags
+set tags+=~/.vim/tags/cpp_src/tags
+set tags=tags;
+
+" scroll jump
+set scrolljump=0
+set scrolloff=0
+
+"-----------------------------------------------------------------
+" plugin - NERD_commenter.vim 注释代码用的，
+" https://github.com/scrooloose/nerdcommenter
+"-----------------------------------------------------------------
+
+" Add spaces after comment delimiters by default
+let g:NERDSpaceDelims = 1
+
+" Use compact syntax for prettified multi-line comments
+let g:NERDCompactSexyComs = 1
+
+" Align line-wise comment delimiters flush left instead of following code     indentation
+let g:NERDDefaultAlign = 'left'
+
+" Set a language to use its alternate delimiters by default
+let g:NERDAltDelims_java = 1
+
+" Add your own custom formats or override the defaults
+" let g:NERDCustomDelimiters = { ',m': { 'left': '/**','right': '*/' } }
+nnoremap ,m :call NERDComment(0,"toggle")<CR>
+vnoremap ,m :call NERDComment(0,"toggle")<CR>
+nnoremap <C-_> :call NERDComment(0,"toggle")<CR>
+vnoremap <C-_> :call NERDComment(0,"toggle")<CR>
+
+
+" Allow commenting and inverting empty lines (useful when commenting a reg    ion)
+let g:NERDCommentEmptyLines = 1
+
+" Enable trimming of trailing whitspace when uncommenting
+let g:NERDTrimTrailingWhitespace = 1
+

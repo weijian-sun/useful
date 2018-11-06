@@ -1,0 +1,1029 @@
+/***************************************************************************
+ *
+ * Copyright (c) 2018 Alibaba-inc.com, Inc. All Rights Reserved
+ * $Id$
+ *
+ **************************************************************************/
+
+ /**
+ * @file cube_edge.cpp
+ * @author Weijian Sun(weijian.swj@alibaba-inc.com)
+ *
+ **/
+
+#include "lidar_cam_calib/cube_edge.h"
+
+namespace calib{
+
+
+boost::shared_ptr<pcl::visualization::PCLVisualizer> simpleVis(pcl::PointCloud<pcl::PointXYZ>::ConstPtr cloud)
+{
+    boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer (new pcl::visualization::PCLVisualizer ("3D Viewer"));
+    viewer->setBackgroundColor (0, 0, 0);
+    viewer->addPointCloud<pcl::PointXYZ> (cloud, "sample cloud");
+    viewer->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "sample cloud");
+    viewer->initCameraParameters ();
+    return (viewer);
+}
+
+boost::shared_ptr<pcl::visualization::PCLVisualizer> CubeEdgeProcess::rgbVis (pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr cloud)
+{
+    boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer (new pcl::visualization::PCLVisualizer ("3D Viewer"));
+    viewer->setBackgroundColor (0, 0, 0);
+    pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloud);
+    viewer->addPointCloud<pcl::PointXYZRGB> (cloud, rgb, "sample cloud");
+    viewer->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "sample cloud");
+    viewer->initCameraParameters ();
+    return (viewer);
+}
+
+pcl::PointCloud<pcl::PointXYZ>::Ptr CubeEdgeProcess::crop(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, std::vector<double> region)
+{
+    pcl::PointCloud<pcl::PointXYZ>::Ptr result(new pcl::PointCloud<pcl::PointXYZ>);
+    for(auto p:cloud->points)
+    {
+        if(p.x>=region[0]&&p.y>=region[1]&&p.z>region[2]&&p.x<=region[3]&&p.y<=region[4]&&p.z<=region[5])
+        result->points.push_back(p);
+    }
+    return result;
+}
+
+void CubeEdgeProcess::trans_40p(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud)
+{
+    for(auto &p : cloud->points)
+    {
+        float temp = p.x;
+        p.x = p.y;
+        p.y = temp;
+        p.x = -p.x;
+    }
+    return;
+}
+
+void CubeEdgeProcess::trans_40p_back(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud)
+{
+    for(auto &p : cloud->points)
+    {
+        float temp = p.x;
+        p.x =  p.y;
+        p.y = -temp;
+    }
+    return;
+}
+
+
+
+void CubeEdgeProcess::trans(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud) {
+
+
+    for(auto &p : cloud->points)
+    {
+        Eigen::Vector3d temp = {p.x, p.y, p.z};
+        temp = trans_mat * temp;
+        p.x = temp(0);
+        p.y = temp(1);
+        p.z = temp(2);
+    }
+}
+
+void CubeEdgeProcess::trans_back(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud) {
+
+    for(auto &p : cloud->points)
+    {
+        Eigen::Vector3d temp = {p.x, p.y, p.z};
+        temp = trans_mat.inverse() * temp;
+        p.x = temp(0);
+        p.y = temp(1);
+        p.z = temp(2);
+    }
+}
+
+double CubeEdgeProcess::point2planedistance(pcl::PointXYZ pt, pcl::ModelCoefficients::Ptr coefficients)
+{
+    double f1 = fabs(coefficients->values[0]*pt.x+coefficients->values[1]*pt.y+coefficients->values[2]*pt.z+coefficients->values[3]);
+    double f2 = sqrt(pow(coefficients->values[0],2)+pow(coefficients->values[1],2)+pow(coefficients->values[2],2));
+    return f1/f2;
+}
+
+double CubeEdgeProcess::point2planedistance(pcl::PointXYZ pt, Eigen::Vector4d coefficients)
+{
+    double f1 = fabs(coefficients(0)*pt.x + coefficients(1)*pt.y + coefficients(2)*pt.z + coefficients(3));
+    double f2 = sqrt(pow(coefficients(0), 2) + pow(coefficients(1), 2) + pow(coefficients(2), 2));
+    return f1/f2;
+}
+
+
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr CubeEdgeProcess::generate_plane(Eigen::Vector4d coefficients)
+{
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr temp(new pcl::PointCloud<pcl::PointXYZRGB>);
+    for(double x = 0; x<40; x+=0.1)
+    for(double y = -5; y<5; y+=0.1)
+    {
+        uint8_t r1(255), g1(255), b1(255);
+        uint32_t rgb = ((uint32_t)r1 << 16 | (uint32_t)g1 << 8 | (uint32_t)b1);
+        pcl::PointXYZRGB it;
+        it.x = x;
+        it.y = y;
+        it.z = -(coefficients(0)*x + coefficients(1)*y + coefficients(3))/ coefficients(2);
+        it.rgb = rgb;
+        temp->points.push_back(it);
+    }
+    return temp;
+}
+
+
+double CubeEdgeProcess::point_to_plane_fitting_error(std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>planes_points, std::vector<Eigen::Vector4d>planes)
+{
+    double overalldist = 0.0;
+    int count = 0;
+    for(int i = 0; i < 3; i++)
+    {
+        count += planes_points[i]->points.size();
+        for(auto p : planes_points[i]->points)
+        overalldist += point2planedistance(p, planes[i]);
+    }
+    return overalldist/count;
+}
+
+std::vector<int> CubeEdgeProcess::generate_idx(int n, int m)
+{
+    std::vector<int>cache;
+    while(cache.size()<n)
+    {
+        int temp = rand()%m;
+        bool exit = false;
+        for(auto cadi:cache)
+        if(cadi == temp)exit=true;
+        if(!exit)cache.push_back(temp);
+    }
+    return cache;
+}
+
+Eigen::Vector3d CubeEdgeProcess::vec_to_eig(pcl::PointXYZ point)
+{
+    Eigen::Vector3d eigvec((double)point.x, (double)point.y, (double)point.z);
+    return eigvec;
+}
+
+pcl::PointXYZ CubeEdgeProcess::eigen_to_pointxyz(Eigen::Vector3d point)
+{
+    pcl::PointXYZ p;
+    p.x = point(0);
+    p.y = point(1);
+    p.z = point(2);
+    return p;
+}
+
+Eigen::Vector2d CubeEdgeProcess::max_eigen_vector(Eigen::MatrixXd ATA)
+{
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(ATA);
+    Eigen::MatrixXd eigenvectors = es.eigenvectors().rightCols(1);
+    return eigenvectors;
+}
+
+Eigen::Vector3d CubeEdgeProcess::generate_point(Eigen::Vector4d plane_coeffi)
+{
+    Eigen::Vector3d point;
+    // cout<<"rand seed: "<<rand()<<endl;
+    if(plane_coeffi(0) != 0)
+    {
+        double y = (double)rand();
+        double z = (double)rand();
+        point << (-plane_coeffi[3] - plane_coeffi[1]*y - plane_coeffi[2]*z) / plane_coeffi[0], y, z;
+    }
+    else if(plane_coeffi(1) != 0)
+    {
+        double x = (double)rand();
+        double z = (double)rand();
+        point << x, (-plane_coeffi[3] - plane_coeffi[0]*x - plane_coeffi[2]*z) / plane_coeffi[1], z;
+    }
+    else if(plane_coeffi(2) != 0)
+    {
+        double x = (double)rand();
+        double y = (double)rand();
+        point << x, y, (-plane_coeffi[3] - plane_coeffi[0]*x - plane_coeffi[1]*y) / plane_coeffi[2];
+    }
+    else cout<<"plane error all zero"<<endl;
+    return point;
+}
+
+Eigen::Vector4d CubeEdgeProcess::get_plane_from_norm_point(Eigen::Vector3d norm, Eigen::Vector3d point)
+{
+    Eigen::Vector4d plane;
+    plane<< norm, -norm.transpose() * point;
+    return plane;
+}
+
+Eigen::Vector3d CubeEdgeProcess::coor_trans(Eigen::Vector3d point_in, Eigen::Matrix4d trans)
+{
+    Eigen::Vector4d point, point_out;
+    point<<point_in, 1;
+    point_out = trans * point;
+    return point_out.head(3);
+}
+
+std::vector<float> CubeEdgeProcess::cal_mean(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud)
+{
+    std::vector<float>ans(3, 0.0);
+    for(auto p : cloud->points)
+    {
+        ans[0]+=p.x;
+        ans[1]+=p.y;
+        ans[2]+=p.z;
+    }
+    ans[0]/=cloud->points.size();
+    ans[1]/=cloud->points.size();
+    ans[2]/=cloud->points.size();
+    return ans;
+}
+
+pcl::ModelCoefficients CubeEdgeProcess::eigen_to_model_coeff(Eigen::Vector4d plane)
+{
+    pcl::ModelCoefficients coeff;
+    coeff.values = std::vector<float>(plane.data(), plane.data() + plane.rows() * plane.cols());
+    return coeff;
+}
+
+void CubeEdgeProcess::save_pcl(pcl::PointCloud<pcl::PointXYZ>::Ptr line, std::string path)
+{
+    line->width = 1;
+    line->height = line->points.size();
+    pcl::io::savePCDFileASCII(path, *line);
+}
+
+void CubeEdgeProcess::load_text_proto_message_file(const std::string& path,
+                                  google::protobuf::Message& msg) {
+    int fd = open(path.c_str(), O_RDONLY);
+    PCHECK(fd >= 0) << "path[" << path << "]";
+    google::protobuf::io::FileInputStream file_in(fd);
+    CHECK(google::protobuf::TextFormat::Parse(&file_in, &msg)) << "path[" << path << "]";
+    PCHECK(0 == close(fd));
+}
+
+CubeEdgeProcess::CubeEdgeProcess(std::string path)
+{
+    params_file = path;
+    load_text_proto_message_file(params_file, lidar_camera_calib_param);
+
+    double z_rot;
+    auto param_commom = lidar_camera_calib_param.common_param();
+    std::string channel = param_commom.channel();
+    if(channel == "F0")z_rot = lidar_camera_calib_param.f0_init_xyz_rt().z_rot();
+    if(channel == "B0")z_rot = lidar_camera_calib_param.b0_init_xyz_rt().z_rot();
+    if(channel == "L0")z_rot = lidar_camera_calib_param.l0_init_xyz_rt().z_rot();
+    if(channel == "TL")z_rot = lidar_camera_calib_param.tl_init_xyz_rt().z_rot();
+    if(channel == "R0")z_rot = lidar_camera_calib_param.r0_init_xyz_rt().z_rot();
+    if(channel == "R1")z_rot = lidar_camera_calib_param.r1_init_xyz_rt().z_rot();
+    if(channel == "L1")z_rot = lidar_camera_calib_param.l1_init_xyz_rt().z_rot();
+    std::cout<<"channel:  "<<channel<<"  point_cloud_rot:  "<<z_rot<<std::endl;
+    Eigen::Quaterniond qlidarToCamera;
+    qlidarToCamera = Eigen::AngleAxisd(0 * M_PI / 180., Eigen::Vector3d::UnitX()) *
+                     Eigen::AngleAxisd(0 * M_PI / 180., Eigen::Vector3d::UnitY()) *
+                     Eigen::AngleAxisd(z_rot * M_PI / 180., Eigen::Vector3d::UnitZ());
+    trans_mat = qlidarToCamera.matrix();
+}
+
+bool CubeEdgeProcess::find_cube_edge(std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> *lines)
+{
+    // calib::LidarCameraCalibParam lidar_camera_calib_param;
+    // load_text_proto_message_file(params_file, lidar_camera_calib_param);
+    //
+    // if (!lidar_camera_calib_param.has_threed_threed_calib_params()) {
+    //     return false;
+    // }
+
+    auto param_commom = lidar_camera_calib_param.common_param();
+    auto param_roi = lidar_camera_calib_param.roi();
+
+    std::string file_path = param_commom.data_prefix() + "_" + param_commom.channel() + param_commom.pcd_file_ext();
+
+    bool show = param_commom.show_pcd();
+    bool Pandar40p = param_commom.data_40p();
+
+    std::cout<<file_path<<std::endl;
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr org_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::io::loadPCDFile<pcl::PointXYZ> (file_path, *org_cloud);
+
+    // if(Pandar40p)
+    //     trans_40p(org_cloud);
+
+    trans(org_cloud);
+
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+
+    double lidar_roi_x_min = param_roi.lidar_roi_x_min();
+    double lidar_roi_y_min = param_roi.lidar_roi_y_min();
+    double lidar_roi_z_min = param_roi.lidar_roi_z_min();
+    double lidar_roi_x_max = param_roi.lidar_roi_x_max();
+    double lidar_roi_y_max = param_roi.lidar_roi_y_max();
+    double lidar_roi_z_max = param_roi.lidar_roi_z_max();
+
+    std::vector<double> region{lidar_roi_x_min, lidar_roi_y_min, lidar_roi_z_min, lidar_roi_x_max, lidar_roi_y_max, lidar_roi_z_max};
+
+
+    cloud = crop(org_cloud, region);
+
+
+
+    boost::shared_ptr<pcl::visualization::PCLVisualizer> crop_viewer, viewer, fusion_viewer;
+    if(show){
+        crop_viewer = simpleVis(cloud);
+        while (!crop_viewer->wasStopped())
+        {
+            crop_viewer->spinOnce (100);
+            boost::this_thread::sleep (boost::posix_time::microseconds (100000));
+        }
+    }
+
+    save_pcl(cloud, param_commom.data_prefix() + "_" + param_commom.channel() + param_commom.pcd_crop_ext());
+
+    pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
+    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+    pcl::SACSegmentation<pcl::PointXYZ> seg;
+    pcl::ExtractIndices<pcl::PointXYZ> extract;
+    seg.setOptimizeCoefficients (true);
+    seg.setModelType (pcl::SACMODEL_PLANE);
+    seg.setMethodType (pcl::SAC_RANSAC);
+    seg.setDistanceThreshold(.05);
+
+    std::vector<std::vector<double> >planes;
+    std::vector<pcl::ModelCoefficients>pcl_planes_coeffi;
+    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>planes_points;
+
+    // Create pointcloud to publish inliers
+    int original_size(cloud->points.size());
+    int n_planes(0);
+
+    int _min_percentage = 5;
+
+    while (cloud->points.size() > original_size*_min_percentage/100) {
+        seg.setInputCloud(cloud);
+        seg.segment(*inliers, *coefficients);
+
+        if (inliers->indices.size() == 0)
+            break;
+        double mean_error(0);
+        double max_error(0);
+        double min_error(100000);
+        std::vector<double> err;
+        for (int i=0;i<inliers->indices.size();i++){
+            pcl::PointXYZ pt = cloud->points[inliers->indices[i]];
+            double d = point2planedistance(pt,coefficients)*1000;
+            err.push_back(d);
+            mean_error += d;
+            if (d>max_error) max_error = d;
+            if (d<min_error) min_error = d;
+        }
+        mean_error/=inliers->indices.size();
+
+        double sigma(0);
+        for (int i=0;i<inliers->indices.size();i++){
+            sigma += pow(err[i] - mean_error,2);
+            pcl::PointXYZ pt = cloud->points[inliers->indices[i]];
+        }
+        sigma = sqrt(sigma/inliers->indices.size());
+
+        extract.setInputCloud(cloud);
+        extract.setIndices(inliers);
+
+        extract.setNegative(false);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloudF(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloudf(new pcl::PointCloud<pcl::PointXYZ>);
+        extract.filter(*cloudF);
+        pcl::copyPointCloud(*cloudF, *cloudf);
+        planes_points.push_back(cloudf);
+        cout<<cloudf->points.size()<<endl;
+        extract.setNegative(true);
+        extract.filter(*cloudF);
+        cloud->swap(*cloudF);
+
+        printf("num: fitted plane: %fx%s%fy%s%fz%s%f=0 (inliers: %zu/%i)\n",
+                coefficients->values[0],(coefficients->values[1]>=0?"+":""),
+                coefficients->values[1],(coefficients->values[2]>=0?"+":""),
+                coefficients->values[2],(coefficients->values[3]>=0?"+":""),
+                coefficients->values[3],inliers->indices.size(),original_size);
+        printf("num: mean error: %f(mm), standard deviation: %f (mm), max error: %f(mm)\n", mean_error,sigma,max_error);
+        printf("num: poitns left in cloud %i\n",cloud->width*cloud->height);
+        cout<<"******************"<<endl;
+        n_planes++;
+    }
+
+    std::vector<std::vector<float>>means;
+    for(auto p : planes_points) {
+        means.push_back(cal_mean(p));
+    }
+
+    if (means.size() < 3) {
+        return false;
+    }
+    if(means[0][2]<means[2][2]) {
+        swap(planes_points[0], planes_points[2]);
+        swap(means[0], means[2]);
+    }
+    if(means[1][2]<means[2][2]) {
+        swap(planes_points[1], planes_points[2]);
+        swap(means[1], means[2]);
+    }
+    if(means[1][1]<means[0][1]) {
+        swap(planes_points[0], planes_points[1]);
+        swap(means[1], means[0]);
+    }
+
+    cout<<"means:"<<endl;
+    for(auto it:means)cout<<it[0]<<" "<<it[1]<<" "<<it[2]<<endl;
+
+    std::vector<float>weight(3);
+    weight[0] = (means[0][0] + means[1][0] + means[2][0]) / 3.0;
+    weight[1] = (means[0][1] + means[1][1] + means[2][1]) / 3.0;
+    weight[2] = (means[0][2] + means[1][2] + means[2][2]) / 3.0;
+
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr p_rgb(new pcl::PointCloud<pcl::PointXYZRGB>);
+    uint8_t r1(255), g1(0), b1(0);
+    uint8_t r2(0), g2(255), b2(0);
+    uint8_t r3(0), g3(0), b3(255);
+    for(int i = 0; i < 3; i++) {
+        for(auto temp_p:planes_points[i]->points) {
+            pcl::PointXYZRGB temp_rgb;
+            temp_rgb.x = temp_p.x;
+            temp_rgb.y = temp_p.y;
+            temp_rgb.z = temp_p.z;
+            uint32_t rgb;
+            if(i==0)
+            rgb = ((uint32_t)r1 << 16 | (uint32_t)g1 << 8 | (uint32_t)b1);
+            if(i==1)
+            rgb = ((uint32_t)r2 << 16 | (uint32_t)g2 << 8 | (uint32_t)b2);
+            if(i==2)
+            rgb = ((uint32_t)r3 << 16 | (uint32_t)g3 << 8 | (uint32_t)b3);
+            temp_rgb.rgb = *reinterpret_cast<float*>(&rgb);
+            p_rgb->points.push_back(temp_rgb);
+        }
+    }
+
+    std::vector<int>idx = {0, 1, 2};
+    bool flag = true;
+    int itera = 100;
+    std::vector<Eigen::Vector4d>planes_coeffi(3), best_planes_coeffi(3);
+    int max_count = 0;
+    Eigen::Vector3d plane0_norm, plane1_norm, plane2_norm;
+    Eigen::Vector4d plane_0, plane_1, plane_2;
+    while(itera--) {
+        cout<<"itera:  "<<itera<<endl;
+        std::random_shuffle(idx.begin(), idx.end());
+        std::vector<int>cadi_zero = generate_idx(3, planes_points[idx[0]]->points.size());
+        std::vector<int>cadi_one = generate_idx(2, planes_points[idx[1]]->points.size());
+        std::vector<int>cadi_two = generate_idx(1, planes_points[idx[2]]->points.size());
+
+        Eigen::Vector3d v1, v2;
+
+        v1<<planes_points[idx[0]]->points[cadi_zero[0]].x-planes_points[idx[0]]->points[cadi_zero[1]].x,
+            planes_points[idx[0]]->points[cadi_zero[0]].y-planes_points[idx[0]]->points[cadi_zero[1]].y,
+            planes_points[idx[0]]->points[cadi_zero[0]].z-planes_points[idx[0]]->points[cadi_zero[1]].z;
+
+        v2<<planes_points[idx[0]]->points[cadi_zero[0]].x-planes_points[idx[0]]->points[cadi_zero[2]].x,
+            planes_points[idx[0]]->points[cadi_zero[0]].y-planes_points[idx[0]]->points[cadi_zero[2]].y,
+            planes_points[idx[0]]->points[cadi_zero[0]].z-planes_points[idx[0]]->points[cadi_zero[2]].z;
+
+        plane0_norm = v1.cross(v2);
+        plane0_norm/=plane0_norm.norm();
+
+        Eigen::Vector3d plane0_point0(planes_points[idx[0]]->points[cadi_zero[0]].x,planes_points[idx[0]]->points[cadi_zero[0]].y,planes_points[idx[0]]->points[cadi_zero[0]].z);
+        plane_0 << plane0_norm,-plane0_norm.transpose().dot(plane0_point0);
+
+        planes_coeffi[idx[0]] = plane_0;
+
+        Eigen::Vector3d v3;
+        v3<<planes_points[idx[1]]->points[cadi_one[0]].x-planes_points[idx[1]]->points[cadi_one[1]].x,
+            planes_points[idx[1]]->points[cadi_one[0]].y-planes_points[idx[1]]->points[cadi_one[1]].y,
+            planes_points[idx[1]]->points[cadi_one[0]].z-planes_points[idx[1]]->points[cadi_one[1]].z;
+        Eigen::Vector3d plane1_point0(planes_points[idx[1]]->points[cadi_one[0]].x,planes_points[idx[1]]->points[cadi_one[0]].y,planes_points[idx[1]]->points[cadi_one[0]].z);
+
+        plane1_norm = v3.cross(plane0_norm);
+        plane1_norm /= plane1_norm.norm();
+        plane_1 << plane1_norm, -plane1_norm.dot(plane1_point0);
+
+        planes_coeffi[idx[1]] = plane_1;
+
+        Eigen::Vector3d plane2_point0(planes_points[idx[2]]->points[cadi_two[0]].x,planes_points[idx[2]]->points[cadi_two[0]].y,planes_points[idx[2]]->points[cadi_two[0]].z);
+        plane2_norm << plane0_norm.cross(plane1_norm);
+        plane2_norm /= plane2_norm.norm();
+        plane_2 << plane2_norm, -plane2_norm.dot(plane2_point0);
+
+        planes_coeffi[idx[2]] = plane_2;
+
+        cout<<"plane0 ";
+        cout<<plane_0.transpose()<<endl;
+        cout<<"plane1 ";
+        cout<<plane_1.transpose()<<endl;
+        cout<<"plane2 ";
+        cout<<plane_2.transpose()<<endl;
+
+        int count = 0;
+        double threshold_dist = 1e-2;
+
+        for(int i = 0; i < 3; i++) {
+            pcl::PointIndices::Ptr outliers(new pcl::PointIndices);
+            for(int id = 0; id < planes_points[i]->points.size(); id++) {
+                if(point2planedistance(planes_points[i]->points[id], planes_coeffi[i]) <= threshold_dist)count++;
+                else outliers->indices.push_back(id);
+            }
+        }
+
+        cout<<"inliers:  "<<count<<endl;
+
+        if(count>max_count) {
+            max_count = count;
+            best_planes_coeffi = planes_coeffi;
+        }
+    }
+
+    plane_0 = best_planes_coeffi[0];
+    plane0_norm = plane_0.head(3);
+    plane0_norm /= plane0_norm.norm();
+    plane_1 = best_planes_coeffi[1];
+    plane1_norm = plane_1.head(3);
+    plane1_norm /= plane1_norm.norm();
+    plane_2 = best_planes_coeffi[2];
+    plane2_norm = plane_2.head(3);
+    plane2_norm /= plane2_norm.norm();
+
+    Eigen::Vector3d D(-plane_0(3), -plane_1(3), -plane_2(3));
+    Eigen::MatrixXd ABC(3, 3);
+    ABC << plane_0.head(3).transpose(), plane_1.head(3).transpose(), plane_2.head(3).transpose();
+    Eigen::Vector3d inter_three_plane = ABC.inverse() * D;
+
+    std::cout<<inter_three_plane<<std::endl;
+
+    std::cout<<"%%%%%%%%%%%%%%%%   inter_three_plane to plane distance   %%%%%%%%%%%%%%%%%%%%%"<<std::endl;
+    std::cout<<point2planedistance(eigen_to_pointxyz(inter_three_plane), best_planes_coeffi[0])<<std::endl;
+    std::cout<<point2planedistance(eigen_to_pointxyz(inter_three_plane), best_planes_coeffi[1])<<std::endl;
+    std::cout<<point2planedistance(eigen_to_pointxyz(inter_three_plane), best_planes_coeffi[2])<<std::endl;
+    std::cout<<std::endl;
+    std::cout<<std::endl;
+
+    Eigen::Vector3d point1(planes_points[0]->points[10].x, planes_points[0]->points[10].y, planes_points[0]->points[10].z);
+    Eigen::Vector3d point2(planes_points[1]->points[10].x, planes_points[1]->points[10].y, planes_points[1]->points[10].z);
+
+    point1 -= inter_three_plane;
+    point2 -= inter_three_plane;
+
+    Eigen::Vector3d wei(weight[0], weight[1], weight[2]);
+    wei -= inter_three_plane;
+
+    if(plane0_norm.transpose() * wei < 0)
+    {
+        plane0_norm = -plane0_norm;
+        plane_0 = -plane_0;
+    }
+
+    if(plane1_norm.transpose() * wei < 0)
+    {
+        plane1_norm = -plane1_norm;
+        plane_1 = -plane_1;
+    }
+
+    if(plane2_norm.transpose() * wei < 0)
+    {
+        plane2_norm = -plane2_norm;
+        plane_2 = -plane_2;
+    }
+
+    Eigen::MatrixXd T(4, 4), T_inv(4, 4), R(3, 3);
+    R.col(0) = plane0_norm;
+    R.col(1) = plane1_norm;
+    R.col(2) = plane2_norm;
+
+    T_inv.topLeftCorner(3, 3) = R;
+    T_inv.row(3)<<0, 0, 0, 1;
+    T_inv.col(3).head(3) = inter_three_plane;
+    T = T_inv.inverse();
+
+    std::cout<<"zero point:  "<<std::endl;
+    std::cout<<coor_trans(inter_three_plane, T)<<std::endl;
+    std::cout<<"p0 norm:  "<<std::endl;
+    std::cout<<coor_trans(plane0_norm + inter_three_plane, T)<<std::endl;
+    std::cout<<"p1 norm:  "<<std::endl;
+    std::cout<<coor_trans(plane1_norm + inter_three_plane, T)<<std::endl;
+    std::cout<<"p2 norm:  "<<std::endl;
+    std::cout<<coor_trans(plane2_norm + inter_three_plane, T)<<std::endl;
+
+    /*******rotation step********/
+    int PA, PB, shift;
+    Eigen::MatrixXd A;
+    Eigen::Vector2d X;
+    Eigen::Matrix3d R_z;
+
+    cout<<"*************************rotation*************************"<<endl;
+    cout<<"inital fitting error: "<<point_to_plane_fitting_error(planes_points, std::vector<Eigen::Vector4d>{plane_0, plane_1, plane_2});
+    itera = 0;
+    while(itera--) {
+        PA = 0, PB = 1;
+        // c -s  0
+        // s  c  0
+        // 0  0  1
+        A.resize((int)planes_points[PA]->points.size() + (int)planes_points[PB]->points.size(), 2);
+        cout<<A.rows()<<" "<<A.cols()<<endl;
+
+        for(int i = 0; i < planes_points[PA]->points.size(); i++)
+        {
+            pcl::PointXYZ temp_p = planes_points[PA]->points[i];
+            Eigen::Vector3d eig_p(temp_p.x, temp_p.y, temp_p.z);
+            Eigen::Vector3d trans_p = coor_trans(eig_p, T);
+
+            // cout<<eig_p.transpose()<<"      "<<trans_p.transpose()<<endl;
+
+            A.row(i)<<trans_p(0), -trans_p(1);
+        }
+
+        cout<<"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"<<endl;
+        shift = planes_points[PA]->points.size();
+        for(int j = 0; j < planes_points[PB]->points.size(); j++)
+        {
+            pcl::PointXYZ temp_p = planes_points[PB]->points[j];
+            Eigen::Vector3d eig_p(temp_p.x, temp_p.y, temp_p.z);
+            Eigen::Vector3d trans_p = coor_trans(eig_p, T);
+
+            // cout<<eig_p.transpose()<<"      "<<trans_p.transpose()<<endl;
+
+            A.row(j+shift)<<trans_p(1), trans_p(0);
+        }
+
+        cout<<"**********eigen_vector****************"<<endl;
+        X = max_eigen_vector(A.transpose() * A);
+        R_z << X(0), -X(1),  0,
+               X(1),  X(0),  0,
+                  0,     0,  1;
+
+
+        plane0_norm = T.topLeftCorner(3,3).inverse() * R_z * Eigen::Vector3d(1, 0, 0);
+        plane0_norm /= plane0_norm.norm();
+        plane_0 = get_plane_from_norm_point(plane0_norm, inter_three_plane);
+
+
+        plane1_norm = T.topLeftCorner(3,3).inverse() * R_z * Eigen::Vector3d(0, 1, 0);
+        plane1_norm /= plane1_norm.norm();
+        plane_1 = get_plane_from_norm_point(plane1_norm, inter_three_plane);
+
+        cout<<"T1: "<<endl;
+        cout<<T_inv<<endl;
+
+        R.col(0) = plane0_norm;
+        R.col(1) = plane1_norm;
+        T_inv.topLeftCorner(3, 3) = R;
+        T = T_inv.inverse();
+
+        cout<<"T2: "<<endl;
+        cout<<T_inv<<endl;
+
+
+
+        PA = 1, PB = 2;
+        // 1  0  0
+        // 0  c -s
+        // 0  s  c
+        A.resize((int)planes_points[PA]->points.size() + (int)planes_points[PB]->points.size(), 2);
+        cout<<A.rows()<<" "<<A.cols()<<endl;
+
+        for(int i = 0; i < planes_points[PA]->points.size(); i++)
+        {
+            pcl::PointXYZ temp_p = planes_points[PA]->points[i];
+            Eigen::Vector3d eig_p(temp_p.x, temp_p.y, temp_p.z);
+            Eigen::Vector3d trans_p = coor_trans(eig_p, T);
+
+            // cout<<eig_p.transpose()<<"    "<<trans_p.transpose()<<endl;
+
+            A.row(i)<<trans_p(1), -trans_p(2);
+        }
+        cout<<"$$$$$$$$$$$$$$$$$$$$$$$$$$$$"<<endl;
+        shift = planes_points[PA]->points.size();
+        for(int j = 0; j < planes_points[PB]->points.size(); j++)
+        {
+            pcl::PointXYZ temp_p = planes_points[PB]->points[j];
+            Eigen::Vector3d eig_p(temp_p.x, temp_p.y, temp_p.z);
+            Eigen::Vector3d trans_p = coor_trans(eig_p, T);
+
+            // cout<<eig_p.transpose()<<"    "<<trans_p.transpose()<<endl;
+
+            A.row(j+shift)<<trans_p(2), trans_p(1);
+        }
+
+        cout<<"**********eigen_vector*******************"<<endl;
+        cout<< max_eigen_vector(A.transpose() * A) <<endl;
+        X = max_eigen_vector(A.transpose() * A);
+
+        R_z <<1,     0,     0,
+              0,  X(0), -X(1),
+              0,  X(1),  X(0);
+
+        plane1_norm = T.topLeftCorner(3,3).inverse() * R_z * Eigen::Vector3d(0, 1, 0);
+        plane1_norm /= plane1_norm.norm();
+        plane_1 = get_plane_from_norm_point(plane1_norm, inter_three_plane);
+
+        plane2_norm = T.topLeftCorner(3,3).inverse() * R_z * Eigen::Vector3d(0, 0, 1);
+        plane2_norm /= plane2_norm.norm();
+        plane_2 = get_plane_from_norm_point(plane2_norm, inter_three_plane);
+
+        R.col(1) = plane1_norm;
+        R.col(2) = plane2_norm;
+        cout<<"T1"<<endl;
+        cout<<T_inv<<endl;
+
+        T_inv.topLeftCorner(3, 3) = R;
+        cout<<"T2"<<endl;
+        cout<<T_inv<<endl;
+        T = T_inv.inverse();
+
+
+        PA = 2, PB = 0;
+        // c  0 -s
+        // 0  1  0
+        // s  0  c
+        A.resize((int)planes_points[PA]->points.size() + (int)planes_points[PB]->points.size(), 2);
+        cout<<A.rows()<<" "<<A.cols()<<endl;
+
+        for(int i = 0; i < planes_points[PA]->points.size(); i++)
+        {
+            pcl::PointXYZ temp_p = planes_points[PA]->points[i];
+            Eigen::Vector3d eig_p(temp_p.x, temp_p.y, temp_p.z);
+            Eigen::Vector3d trans_p = coor_trans(eig_p, T);
+            A.row(i)<<trans_p(1), -trans_p(2);
+        }
+        shift = planes_points[PA]->points.size();
+        for(int j = 0; j < planes_points[PB]->points.size(); j++)
+        {
+            pcl::PointXYZ temp_p = planes_points[PB]->points[j];
+            Eigen::Vector3d eig_p(temp_p.x, temp_p.y, temp_p.z);
+            Eigen::Vector3d trans_p = coor_trans(eig_p, T);
+            A.row(j+shift)<<trans_p(2), trans_p(0);
+        }
+
+        cout<<"*********eigen_vector******************"<<endl;
+        cout<< max_eigen_vector(A.transpose() * A) <<endl;
+        X = max_eigen_vector(A.transpose() * A);
+
+        R_z << X(0),    0,  -X(1),
+                  0,    1,      0,
+               X(1),    0,   X(0);
+
+        plane0_norm = T.topLeftCorner(3,3).inverse() * R_z * Eigen::Vector3d(1, 0, 0);
+        plane0_norm /= plane0_norm.norm();
+        plane_0 = get_plane_from_norm_point(plane0_norm, inter_three_plane);
+
+        plane2_norm = T.topLeftCorner(3,3).inverse() * R_z * Eigen::Vector3d(0 ,0, 1);
+        plane2_norm /= plane2_norm.norm();
+        plane_2 = get_plane_from_norm_point(plane2_norm, inter_three_plane);
+
+        R.col(0) = plane0_norm;
+        R.col(2) = plane2_norm;
+        cout<<"T1"<<endl;
+        cout<<T_inv<<endl;
+        T_inv.topLeftCorner(3, 3) = R;
+        cout<<"T2"<<endl;
+        cout<<T_inv<<endl;
+        T = T_inv.inverse();
+
+
+        cout<<"iter fitting error:  "<<point_to_plane_fitting_error(planes_points, std::vector<Eigen::Vector4d>{plane_0, plane_1, plane_2});
+
+        // viewer->addPlane(eigen_to_model_coeff(plane_0), to_string(itera) + "1");
+        // viewer->addPlane(eigen_to_model_coeff(plane_1), to_string(itera) + "2");
+        // viewer->addPlane(eigen_to_model_coeff(plane_2), to_string(itera) + "3");
+    }
+
+    // cout<<"start"<<endl;
+    // pcl::PointCloud<pcl::PointXYZRGB>::Ptr temp =  generate_plane(plane_2);
+    // cout<<"finish"<<endl;
+    // for(auto p:temp->points)p_rgb->points.push_back(p);
+
+    if(show) {
+        viewer = rgbVis(p_rgb);
+        viewer->addPlane(eigen_to_model_coeff(plane_0), "rp1");
+        viewer->addPlane(eigen_to_model_coeff(plane_1), "rp2");
+        viewer->addPlane(eigen_to_model_coeff(plane_2), "rp3");
+    }
+
+    /******translation step*******/
+    cout<<endl;
+    cout<<"*********************translation***********************"<<endl;
+    cout<<endl;
+    cout<<"inital fitting error:    "<<point_to_plane_fitting_error(planes_points, std::vector<Eigen::Vector4d>{plane_0, plane_1, plane_2});
+
+    Eigen::MatrixXd t;
+
+    for(int iter = 0; iter < 10; iter ++) {
+        Eigen::MatrixXd B(planes_points[0]->points.size() + planes_points[1]->points.size() + planes_points[2]->points.size(), 3);
+        Eigen::MatrixXd c(planes_points[0]->points.size() + planes_points[1]->points.size() + planes_points[2]->points.size(), 1);
+
+        {
+            int i = 0;
+            for(; i < planes_points[0]->points.size(); i++)B.row(i) = plane0_norm.transpose();
+            for(; i < planes_points[0]->points.size() + planes_points[1]->points.size(); i++)B.row(i) = plane1_norm.transpose();
+            for(; i < planes_points[0]->points.size() + planes_points[1]->points.size() + planes_points[2]->points.size(); i++)B.row(i) = plane2_norm.transpose();
+        }
+
+        Eigen::Vector3d point_in_p0, point_in_p1, point_in_p2;
+        point_in_p0 = generate_point(plane_0);
+        point_in_p1 = generate_point(plane_1);
+        point_in_p2 = generate_point(plane_2);
+
+        for(int i = 0; i < planes_points[0]->points.size(); i++)c.row(i) = plane0_norm.transpose() * (vec_to_eig(planes_points[0]->points[i]) - point_in_p0);
+        for(int i = 0; i < planes_points[1]->points.size(); i++)c.row(i + planes_points[0]->points.size()) = plane1_norm.transpose() * (vec_to_eig(planes_points[1]->points[i]) - point_in_p1);
+        for(int i = 0; i < planes_points[2]->points.size(); i++)c.row(i + planes_points[0]->points.size() + planes_points[1]->points.size()) = plane2_norm.transpose() * (vec_to_eig(planes_points[2]->points[i]) - point_in_p2);
+
+        t = (B.transpose() * B).inverse() * B.transpose() * c;
+
+        cout<<"t:  "<<endl;
+        cout<<t<<endl;
+
+        inter_three_plane += t;
+
+        plane_0 = get_plane_from_norm_point(plane0_norm, inter_three_plane);
+        plane0_norm = plane_0.head(3);
+        plane_1 = get_plane_from_norm_point(plane1_norm, inter_three_plane);
+        plane1_norm = plane_1.head(3);
+        plane_2 = get_plane_from_norm_point(plane2_norm, inter_three_plane);
+        plane2_norm = plane_2.head(3);
+
+        cout<<"update fitting error:   "<<point_to_plane_fitting_error(planes_points, std::vector<Eigen::Vector4d>{plane_0, plane_1, plane_2})<<endl;
+    }
+
+    cout<<endl;
+    cout<<"********************* final dis *****************************"<<endl;
+    cout<<point2planedistance(eigen_to_pointxyz(inter_three_plane), plane_2)<<endl;
+
+    if(show) {
+        viewer->addPlane(eigen_to_model_coeff(plane_0), "r1");
+        viewer->addPlane(eigen_to_model_coeff(plane_1), "r2");
+        viewer->addPlane(eigen_to_model_coeff(plane_2), "r3");
+    }
+
+    Eigen::Vector3d pp1 = inter_three_plane + plane0_norm* 10;
+    Eigen::Vector3d pp2 = inter_three_plane + plane1_norm* 10;
+    Eigen::Vector3d pp3 = inter_three_plane + plane2_norm* 10;
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr dense_line(new pcl::PointCloud<pcl::PointXYZ>);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line1(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line2(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line3(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line4(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line5(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line6(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line7(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line8(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line9(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr line10(new pcl::PointCloud<pcl::PointXYZ>);
+
+    double new_size = 0.255;
+
+    for(int count = 0; count < 45; count++) {
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane0_norm*count*0.25));
+        line1->points.push_back(eigen_to_pointxyz(inter_three_plane + plane0_norm*count*0.25));
+
+        //add for dense between 1,2
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.3+plane2_norm*0.05) + plane0_norm*count*0.25));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.3+plane2_norm*0.10) + plane0_norm*count*0.25));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.3+plane2_norm*0.15) + plane0_norm*count*0.25));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.3+plane2_norm*0.20) + plane0_norm*count*0.25));
+
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.3+plane2_norm*new_size) + plane0_norm*count*0.25));
+        line2->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.3+plane2_norm*new_size) + plane0_norm*count*0.25));
+
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.3+plane2_norm*new_size) + plane2_norm*count*0.15));
+        line3->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.3+plane2_norm*new_size) + plane2_norm*count*0.15));
+
+        //add for dense between 3,4
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.2+plane2_norm*new_size) + plane2_norm*count*0.15));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.1+plane2_norm*new_size) + plane2_norm*count*0.15));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane0_norm*0.0+plane2_norm*new_size) + plane2_norm*count*0.15));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.2+plane2_norm*new_size) + plane2_norm*count*0.15));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.1+plane2_norm*new_size) + plane2_norm*count*0.15));
+
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.3+plane2_norm*new_size) + plane2_norm*count*0.15));
+        line4->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.3+plane2_norm*new_size) + plane2_norm*count*0.15));
+
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.3+plane2_norm*new_size) + plane1_norm*count*0.25));
+        line5->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.3+plane2_norm*new_size) + plane1_norm*count*0.25));
+
+        //add for dense between 5,6
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.3+plane2_norm*0.05) + plane1_norm*count*0.25));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.3+plane2_norm*0.10) + plane1_norm*count*0.25));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.3+plane2_norm*0.15) + plane1_norm*count*0.25));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + (plane1_norm*0.3+plane2_norm*0.20) + plane1_norm*count*0.25));
+
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane1_norm*count*0.25));
+        line6->points.push_back(eigen_to_pointxyz(inter_three_plane + plane1_norm*count*0.25));
+
+
+        if(count < 2)continue;
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane2_norm*7.0267 + plane1_norm*0.1395 +  plane0_norm*count*0.25));
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane2_norm*7.0073 + plane0_norm*0.1543 +  plane1_norm*count*0.25));
+
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane0_norm*12.0027491179 + plane2_norm*count*0.15));
+        line7->points.push_back(eigen_to_pointxyz(inter_three_plane + plane0_norm*12.0027491179 + plane2_norm*count*0.15));
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane0_norm*12.0027491179 - plane1_norm*1.216 + plane2_norm*count*0.15));
+
+
+        //add for dense between 7,8
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane0_norm*(12.0027491179 - 0.1) +plane2_norm*count*0.15));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane0_norm*(12.0027491179 - 0.2) +plane2_norm*count*0.15));
+
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane0_norm*(12.0027491179 - 0.3) +plane2_norm*count*0.15));
+        line8->points.push_back(eigen_to_pointxyz(inter_three_plane + plane0_norm*(12.0027491179 - 0.3) +plane2_norm*count*0.15));
+
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane1_norm*12.0588214+ plane2_norm*count*0.15));
+        line9->points.push_back(eigen_to_pointxyz(inter_three_plane + plane1_norm*12.0588214+ plane2_norm*count*0.15));
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane1_norm*12.0588214 - plane0_norm*1.220 + plane2_norm*count*0.15));
+
+        //add for dense between 9,10
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane1_norm*(12.0588214 - 0.1) +plane2_norm*count*0.15));
+        dense_line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane1_norm*(12.0588214 - 0.2) +plane2_norm*count*0.15));
+
+        line->points.push_back(eigen_to_pointxyz(inter_three_plane + plane1_norm*(12.0588214 - 0.3) +plane2_norm*count*0.15));
+        line10->points.push_back(eigen_to_pointxyz(inter_three_plane + plane1_norm*(12.0588214 - 0.3) +plane2_norm*count*0.15));
+    }
+
+    if(Pandar40p) {
+        trans_40p_back(line);
+        trans_40p_back(line1);
+        trans_40p_back(line2);
+        trans_40p_back(line3);
+        trans_40p_back(line4);
+        trans_40p_back(line5);
+        trans_40p_back(line6);
+        trans_40p_back(line7);
+        trans_40p_back(line8);
+        trans_40p_back(line9);
+        trans_40p_back(line10);
+    }
+
+    trans_back(line);
+    trans_back(line1);
+    trans_back(line2);
+    trans_back(line3);
+    trans_back(line4);
+    trans_back(line5);
+    trans_back(line6);
+    trans_back(line7);
+    trans_back(line8);
+    trans_back(line9);
+    trans_back(line10);
+    trans_back(org_cloud);
+
+
+    lines->push_back(line1);
+    lines->push_back(line2);
+    lines->push_back(line3);
+    lines->push_back(line4);
+    lines->push_back(line5);
+    lines->push_back(line6);
+    lines->push_back(line7);
+    lines->push_back(line8);
+    lines->push_back(line9);
+    lines->push_back(line10);
+
+    if(show) {
+        viewer->addLine(pcl::PointXYZ(inter_three_plane(0), inter_three_plane(1), inter_three_plane(2)), pcl::PointXYZ(pp3(0), pp3(1), pp3(2)), 1, 1, 1, "l1");
+        viewer->addLine(pcl::PointXYZ(inter_three_plane(0), inter_three_plane(1), inter_three_plane(2)), pcl::PointXYZ(pp2(0), pp2(1), pp2(2)), 1, 1, 1, "l2");
+        viewer->addLine(pcl::PointXYZ(inter_three_plane(0), inter_three_plane(1), inter_three_plane(2)), pcl::PointXYZ(pp1(0), pp1(1), pp1(2)), 1, 1, 1, "l3");
+
+        viewer->addText3D("0", pcl::PointXYZ(inter_three_plane(0), inter_three_plane(1), inter_three_plane(2)),0.1,  1, 1, 1, "0");
+        viewer->addText3D("1", pcl::PointXYZ(pp1(0), pp1(1), pp1(2)), 0.1,  1, 1, 1, "1");
+        viewer->addText3D("2", pcl::PointXYZ(pp2(0), pp2(1), pp2(2)), 0.1,  1, 1, 1, "2");
+        viewer->addText3D("3", pcl::PointXYZ(pp3(0), pp3(1), pp3(2)), 0.1,  1, 1, 1, "3");
+    }
+
+
+    if(show) {
+        while (!viewer->wasStopped ()) {
+            viewer->spinOnce (100);
+            boost::this_thread::sleep (boost::posix_time::microseconds (100000));
+        }
+    }
+
+    save_pcl(line, param_commom.data_prefix() + "_" + param_commom.channel() + param_commom.pcd_line_file_ext());
+
+    for(auto p:line->points)
+    dense_line->points.push_back(p);
+
+    save_pcl(dense_line, param_commom.data_prefix() + "_" + param_commom.channel() + param_commom.pcd_dense_line_file_ext());
+
+    //show cloud fusion
+    for(auto p:line->points)
+    org_cloud->points.push_back(p);
+    if(show) {
+        fusion_viewer = simpleVis(org_cloud);
+        while (!fusion_viewer->wasStopped ()) {
+            fusion_viewer->spinOnce (100);
+            boost::this_thread::sleep (boost::posix_time::microseconds (100000));
+        }
+    }
+
+    return lines;
+}
+
+
+} //namespace calib
+

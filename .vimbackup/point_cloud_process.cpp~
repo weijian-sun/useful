@@ -1,0 +1,366 @@
+/***************************************************************************
+ *
+ * Copyright (c) 2018 Alibaba-inc.com, Inc. All Rights Reserved
+ * $Id$
+ *
+ **************************************************************************/
+
+ /**
+ * @file point_cloud_process.cpp
+ * @author lifangzhen(fangzhen.lfz@alibaba-inc.com)
+ * @date 2018/07/01 21:00:04
+ * @version $Revision$
+ * @brief
+ *
+ **/
+
+#include "lidar_cam_calib/point_cloud_process.h"
+
+#include <thread>
+#include <iostream>
+#include <sstream>
+#include <unordered_map>
+#include <vector>
+#include <unistd.h>
+#include <glog/logging.h>
+#include <omp.h>
+
+#include <pcl/io/pcd_io.h>
+#include <pcl/common/eigen.h>
+#include <pcl/common/transforms.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/sample_consensus/ransac.h>
+#include <pcl/sample_consensus/sac_model_line.h>
+#include <pcl/sample_consensus/sac_model_plane.h>
+#include <pcl/common/intersections.h>
+
+
+namespace calib {
+
+using hadutils::PCLVelodyne;
+
+// bool compare_degree(const PCLVelodyne& pt1, const PCLVelodyne& pt2) {
+//     return pt1.mdegree < pt2.mdegree;
+// }
+//
+// bool compare_x(const PCLVelodyne& pt1, const PCLVelodyne& pt2) {
+//     return pt1.x < pt2.x;
+// }
+//
+// bool compare_y(const PCLVelodyne& pt1, const PCLVelodyne& pt2) {
+//     return pt1.y < pt2.y;
+// }
+
+bool PointCloudProcess::init(const calib::ThreeD2ThreeDCalibParam& calib_param) {
+    // channel_name_ = calib_param.lidar_channel_name();
+    // superposition_frame_num_ = calib_param.lidar_superposition_frame_num();
+    // distance_threshold_ = calib_param.lidar_distance_threshold();
+    // roi_x_min_ = calib_param.lidar_roi_x_min();
+    // roi_x_max_ = calib_param.lidar_roi_x_max();
+    // roi_y_min_ = calib_param.lidar_roi_y_min();
+    // roi_y_max_ = calib_param.lidar_roi_y_max();
+    // roi_z_min_ = calib_param.lidar_roi_z_min();
+    // roi_z_max_ = calib_param.lidar_roi_z_max();
+
+    // frame_num_ = 0;
+    //
+    // cloud_.reset(new pcl::PointCloud<PCLVelodyne>);
+    // last_cloud_.reset(new pcl::PointCloud<PCLVelodyne>);
+
+    // while (!lcm_.good()) {
+    //     sleep(1);
+    //     LOG_FIRST_N(INFO, 5) << "Waiting for LCM connection...";
+    // }
+    // LOG(INFO) << "connected to LCM server, channel_name: " << channel_name_;
+
+    /// init subscriber
+    // lcm::Subscription *subscriber = lcm_.subscribe(
+    //     channel_name_,
+    //     &PointCloudProcess::pointcloud_callback,
+    //     this);
+    // subscriber->setQueueCapacity(1);
+    //
+    // std::thread th([&] { while (lcm_.handle() == 0) {} });
+    // th.detach();
+}
+
+// void PointCloudProcess::pointcloud_callback(const lcm::ReceiveBuffer* [>rbuf<],
+//                                             const std::string& [>channel<],
+//                                             const had::pointcloud_t* pc_msg) {
+//     if (frame_num_ < superposition_frame_num_) {
+//         // PERF_BLOCK_START();
+//         pcl::PointCloud<PCLVelodyne>::Ptr raw_cloud(new pcl::PointCloud<PCLVelodyne>);
+//         hadutils::toPCLVelodyne(*pc_msg, *raw_cloud);
+//         int points_num = 0;
+//         for (size_t i = 0; i < raw_cloud->points.size(); ++i) {
+//             auto pt = (raw_cloud->points)[i];
+//             if (pt.x < 100 && pt.x > -100 && pt.y < 100 && pt.y > -100 && pt.z < 100 && pt.z > -100) {
+//                 (raw_cloud->points)[points_num] = pt;
+//                 points_num++;
+//             }
+//         }
+//         raw_cloud->points.resize(points_num);
+//
+//         cloud_->points.insert(cloud_->points.end(), raw_cloud->points.begin(), raw_cloud->points.end());
+//         ++frame_num_;
+//         // PERF_BLOCK_END("Lidar Main pointcloud_t to pcl::PointCloud<PCLVelodyne>");
+//         std::cout << "lidar_frame num: " << frame_num_ << std::endl;
+//
+//         if (frame_num_ == superposition_frame_num_) {
+//             *last_cloud_ = *raw_cloud;
+//         }
+//     }
+// }
+
+// bool PointCloudProcess::get_roi_cloud(pcl::PointCloud<PCLVelodyne>::Ptr* cloud) {
+//     if (cloud == NULL) {
+//         return false;
+//     }
+//
+//     while (frame_num_ < superposition_frame_num_) {
+//         usleep(100000); // sleep 100ms
+//     }
+//
+//     for (auto pt : cloud_->points) {
+//         if (is_in_roi(pt)) {
+//             (*cloud)->push_back(pt);
+//         }
+//     }
+//
+//     return true;
+// }
+
+// bool PointCloudProcess::calculate_edge_cloud(pcl::PointCloud<PCLVelodyne>::Ptr& in_cloud,
+//         pcl::PointCloud<PCLVelodyne>::Ptr* edge_cloud, bool is_camera_coordinate) {
+//     if (edge_cloud == NULL) {
+//         return false;
+//     }
+//
+//     std::unordered_map<int, std::vector<PCLVelodyne> > ring_cloud_map;
+//     for (auto pt : in_cloud->points) {
+//         if (ring_cloud_map.find(pt.ring) == ring_cloud_map.end()) {
+//             ring_cloud_map[pt.ring] = std::vector<PCLVelodyne>();
+//         }
+//         ring_cloud_map[pt.ring].push_back(pt);
+//     }
+//
+//     std::cout << "ring_cloud_map.size() = " << ring_cloud_map.size() << std::endl;
+//
+//     for (auto iter = ring_cloud_map.begin(); iter != ring_cloud_map.end(); ++iter) {
+//         // std::sort(iter->second.begin(), iter->second.end(), compare_x);
+//
+//         PCLVelodyne pt_first = *(iter->second.begin());
+//         PCLVelodyne pt_last = *(iter->second.begin());
+//         for (auto pt : iter->second) {
+//             if (pt_first.x > pt.x) {
+//                 pt_first = pt;
+//             }
+//             if (pt_last.x < pt.x) {
+//                 pt_last = pt;
+//             }
+//         }
+//         (*edge_cloud)->points.push_back(pt_first);
+//         (*edge_cloud)->points.push_back(pt_last);
+//     }
+//
+//     return true;
+// }
+
+// bool PointCloudProcess::calculate_edge_by_ring(pcl::PointCloud<PCLVelodyne>::Ptr& in_cloud,
+//         pcl::PointCloud<PCLVelodyne>::Ptr* edge_cloud) {
+//     if (edge_cloud == NULL) {
+//         return false;
+//     }
+//
+//     std::unordered_map<int, std::vector<PCLVelodyne> > ring_cloud_map;
+//     for (auto pt : in_cloud->points) {
+//         if (ring_cloud_map.find(pt.ring) == ring_cloud_map.end()) {
+//             ring_cloud_map[pt.ring] = std::vector<PCLVelodyne>();
+//         }
+//         if (!std::isnan(pt.x) && pt.x > 0 && std::sqrt(pt.x * pt.x + pt.y * pt.y) < 50) {
+//             ring_cloud_map[pt.ring].push_back(pt);
+//         }
+//     }
+//
+//     std::cout << "ring_cloud_map.size() = " << ring_cloud_map.size() << std::endl;
+//
+//     for (auto iter = ring_cloud_map.begin(); iter != ring_cloud_map.end(); ++iter) {
+//         /// only work with front view
+//         std::sort(iter->second.begin(), iter->second.end(), compare_y);
+//
+//         if (iter->second.size() <= 0) {
+//             continue;
+//         }
+//         std::vector<PCLVelodyne> temp_points;
+//         pcl::PointCloud<PCLVelodyne>::Ptr temp_cloud(new pcl::PointCloud<PCLVelodyne>);
+//         for (size_t i = 1; i < iter->second.size(); ++i) {
+//             PCLVelodyne pt_last = (iter->second)[i - 1];
+//             PCLVelodyne pt_now = (iter->second)[i];
+//             double last_dist = std::sqrt(pt_last.x * pt_last.x + pt_last.y * pt_last.y);
+//             double now_dist = std::sqrt(pt_now.x * pt_now.x + pt_now.y * pt_now.y);
+//             // if (std::isnan(pt_last.x) && !std::isnan(pt_now.x)) {
+//             //     (*edge_cloud)->points.push_back(pt_now);
+//             // } else if (std::isnan(pt_now.x) && !std::isnan(pt_last.x)) {
+//             //     (*edge_cloud)->points.push_back(pt_last);
+//             // } else
+//             if (!std::isnan(pt_now.x) && !std::isnan(pt_last.x) && fabs(last_dist - now_dist) > 1.5) {
+//                 PCLVelodyne pt = now_dist - last_dist > 0 ? pt_last : pt_now;
+//                 // (*edge_cloud)->points.push_back(pt);
+//                 temp_points.push_back(pt);
+//             }
+//         }
+//         if (temp_points.size() <= 0) {
+//             continue;
+//         } else if (temp_points.size() == 1) {
+//             (*edge_cloud)->points.push_back(temp_points[0]);
+//             continue;
+//         }
+//         temp_cloud->points.push_back(temp_points[0]);
+//         for (size_t i = 1; i < temp_points.size(); ++i) {
+//             temp_cloud->points.push_back(temp_points[i]);
+//             PCLVelodyne pt_last = temp_points[i - 1];
+//             PCLVelodyne pt_now = temp_points[i];
+//             double last_dist = std::sqrt(pt_last.x * pt_last.x + pt_last.y * pt_last.y);
+//             double now_dist = std::sqrt(pt_now.x * pt_now.x + pt_now.y * pt_now.y);
+//             if (fabs(last_dist - now_dist) > 1.5) {
+//                 PCLVelodyne pt = now_dist - last_dist > 0 ? pt_last : pt_now;
+//                 (*edge_cloud)->points.push_back(pt);
+//                 temp_points.push_back(pt);
+//             }
+//         }
+//
+//         // temp_cloud->width = 1;
+//         // temp_cloud->height = temp_cloud->size();
+//         // std::cout << "cloud_size: " << temp_cloud->height << std::endl;
+//         // std::ostringstream oss;
+//         // oss << temp_cloud->points[0].ring;
+//         // pcl::io::savePCDFileASCII (oss.str() + ".pcd", *temp_cloud);
+//         // std::cout << "cloud_size: " << temp_cloud->width << std::endl;
+//
+//     }
+//
+//     return true;
+// }
+
+// bool PointCloudProcess::pointcloud_subscriber(pcl::PointCloud<PCLVelodyne>::Ptr* cloud) {
+//     if (cloud == NULL) {
+//         return false;
+//     }
+//
+//     while (frame_num_ < superposition_frame_num_) {
+//         usleep(100000); // sleep 100ms
+//     }
+//
+//     std::unordered_map<int, std::vector<PCLVelodyne> > ring_cloud_map;
+//     for (auto pt : cloud_->points) {
+//         if (is_in_roi(pt))
+//         {
+//             if (ring_cloud_map.find(pt.ring) == ring_cloud_map.end()) {
+//                 ring_cloud_map[pt.ring] = std::vector<PCLVelodyne>();
+//             }
+//             float degree = std::atan2(pt.x, pt.y);
+//             float degree_2pi = degree > 0 ? degree : degree + 2 * M_PI;
+//             pt.mdegree = degree_2pi * 3.6 * 1e5;
+//             pt.distance = std::sqrt(pt.x * pt.x + pt.y * pt.y);
+//             ring_cloud_map[pt.ring].push_back(pt);
+//         }
+//     }
+//
+//     std::cout << "ring_cloud_map.size() = " << ring_cloud_map.size() << std::endl;
+//
+//     for (auto iter = ring_cloud_map.begin(); iter != ring_cloud_map.end(); ++iter) {
+//         std::sort(iter->second.begin(), iter->second.end(), compare_degree);
+//         for (size_t i = 1; i < iter->second.size(); ++i) {
+//             PCLVelodyne pt_f = (iter->second)[i - 1];
+//             PCLVelodyne pt = (iter->second)[i];
+//             float xy_dist = std::sqrt(std::pow(pt.x - pt_f.x, 2) + std::pow(pt.y - pt_f.y, 2));
+//             float distance_dif = pt.distance - pt_f.distance;
+//             if (distance_dif < -distance_threshold_ && is_in_roi(pt)) {
+//                 (*cloud)->points.push_back(pt);
+//             } else if (distance_dif > distance_threshold_ && is_in_roi(pt_f)) {
+//                 (*cloud)->points.push_back(pt_f);
+//             } else if (xy_dist > 0.3) {
+//                 (*cloud)->points.push_back(pt);
+//             }
+//         }
+//         (*cloud)->points.push_back(*(iter->second.begin()));
+//         (*cloud)->points.push_back(*(iter->second.end()));
+//     }
+//
+//     return true;
+// }
+
+// bool PointCloudProcess::is_in_roi(const hadutils::PCLVelodyne& pt) {
+//     if (pt.x > roi_x_min_ && pt.x < roi_x_max_ &&
+//         pt.y > roi_y_min_ && pt.y < roi_y_max_ &&
+//         pt.z > roi_z_min_ && pt.z < roi_z_max_) {
+//         return true;
+//     }
+//     return false;
+// }
+
+// bool PointCloudProcess::plane_fitting(std::vector<std::string>& files,
+//         std::map<int, std::vector<float> >* plane_params,
+//         std::map<int, Eigen::MatrixXd>* plane_pts) {
+// // #ifdef USING_OPENMP
+// #pragma omp parallel for num_threads(8)
+// // #endif
+//     for (int i = 0; i < files.size(); ++i) {
+//         auto file_name = files[i];
+//         pcl::PointCloud<PCLVelodyne>::Ptr cloud(new pcl::PointCloud<PCLVelodyne>);
+//         pcl::PointCloud<PCLVelodyne>::Ptr roi_cloud(new pcl::PointCloud<PCLVelodyne>);
+//         pcl::io::loadPCDFile(file_name, *cloud);
+//         for (auto pt : cloud->points) {
+//             if (is_in_roi(pt)) {
+//                 roi_cloud->push_back(pt);
+//             }
+//         }
+//         // std::cout << "roi_cloud->size(): " << roi_cloud->size() << std::endl;
+//         if (roi_cloud->size() <= 50) {
+//             continue;
+//         }
+//         std::string file_perfix = file_name.substr(0, file_name.rfind('.'));
+//         std::string timestamp = file_perfix.substr(file_perfix.rfind('_') + 1);
+//         // pcl::io::savePCDFileASCII ("roi.pcd", *roi_cloud);
+//         Eigen::VectorXf plane_model;
+//         std::vector<int> inliers;
+//         typename pcl::SampleConsensusModelPlane<PCLVelodyne>::Ptr model_l(
+//                 new pcl::SampleConsensusModelPlane<PCLVelodyne> (roi_cloud));
+//
+//         pcl::RandomSampleConsensus<PCLVelodyne> ransac(model_l);
+//         ransac.setDistanceThreshold (0.05);
+//         ransac.computeModel();
+//         ransac.getInliers(inliers);
+//         ransac.getModelCoefficients(plane_model);
+//         plane_model *= plane_model(0) > 0 ? -1 : 1;
+//         std::vector<float> temp_params;
+//         temp_params.push_back(plane_model(0));
+//         temp_params.push_back(plane_model(1));
+//         temp_params.push_back(plane_model(2));
+//         temp_params.push_back(plane_model(3));
+//         std::cout << "lidar_frame_name: " << timestamp << ", plane_model: " << plane_model << std::endl;
+//
+//         int slect_pt_num = 100;
+//         Eigen::MatrixXd plane_pt(3, slect_pt_num);
+//         std::vector<int> idx(inliers.size());
+//         std::iota(idx.begin(), idx.end(), 0);
+//         if (inliers.size() > 100) {
+//             std::random_shuffle(idx.begin(), idx.end());
+//         } else {
+//             slect_pt_num = inliers.size();
+//             plane_pt.resize(3, slect_pt_num);
+//         }
+//         for (int p = 0; p < slect_pt_num; ++p) {
+//             plane_pt.col(p) = Eigen::Vector3d(roi_cloud->points[inliers[idx[p]]].x,
+//                                               roi_cloud->points[inliers[idx[p]]].y,
+//                                               roi_cloud->points[inliers[idx[p]]].z);
+//         }
+// #pragma omp critical
+//         {
+//             plane_params->emplace(std::make_pair(i, temp_params));
+//             plane_pts->emplace(std::make_pair(i, plane_pt));
+//         }
+//     }
+// }
+
+} // namespace calib

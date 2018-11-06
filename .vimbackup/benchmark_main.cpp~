@@ -1,0 +1,309 @@
+/***************************************************************************
+ *
+ * Copyright (c) 2018 Alibaba-inc.com, Inc. All Rights Reserved
+ * $Id$
+ *
+ **************************************************************************/
+
+ /**
+ * @file calib_main.cpp
+ * @author lifangzhen(fangzhen.lfz@alibaba-inc.com)
+ * @date 2018/07/01 20:32:14
+ * @version $Revision$
+ * @brief
+ *
+ **/
+
+#include <iostream>
+#include <sstream>
+#include <fstream>
+#include <Eigen/Eigen>
+#include <Eigen/LU>
+#include <google/protobuf/text_format.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <glog/logging.h>
+// #include <nlopt.hpp>
+
+// #include <utilities/pcl_point_types.h>
+// #include <lcmtypes/had/image_t.hpp>
+// #include <utilities/image/ImageDecoder.h>
+#include <pcl/io/pcd_io.h>
+#include <opencv2/opencv.hpp>
+
+// #include "perception/cam_lidar_calib/3d_3d_calib/point_cloud_process.h"
+// #include "perception/cam_lidar_calib/3d_3d_calib/image_process.h"
+// #include "perception/cam_lidar_calib/3d_3d_calib/corners.h"
+// #include "perception/cam_lidar_calib/3d_3d_calib/find_rt.h"
+#include "utils.h"
+#include "lidar_cam_calib/proto/calib_param.pb.h"
+#include "common/common.h"
+#include "lidar_cam_calib/cube_edge.h"
+
+#define USING_OPENMP
+
+void load_text_proto_message_file(const std::string& path,
+                                  google::protobuf::Message& msg) {
+    int fd = open(path.c_str(), O_RDONLY);
+    PCHECK(fd >= 0) << "path[" << path << "]";
+    google::protobuf::io::FileInputStream file_in(fd);
+    CHECK(google::protobuf::TextFormat::Parse(&file_in, &msg)) << "path[" << path << "]";
+    PCHECK(0 == close(fd));
+}
+
+void readFromXMLFile(const std::string& filePath, cv::Mat& CameraMatrix, cv::Mat& Distorsion,
+        int& width, int& height) {
+    cv::FileStorage fs(filePath, cv::FileStorage::READ);
+    if(!fs.isOpened()) throw std::runtime_error("readFromXMLFile could not open file:"+filePath);
+    int w = -1, h = -1;
+    cv::Mat MCamera, MDist;
+
+    fs["image_width"] >> w;
+    fs["image_height"] >> h;
+    fs["distortion_coefficients"] >> MDist;
+    fs["camera_matrix"] >> MCamera;
+
+    if (MCamera.cols == 0 || MCamera.rows == 0){
+        fs["Camera_Matrix"] >> MCamera;
+        if (MCamera.cols == 0 || MCamera.rows == 0)
+            throw cv::Exception(9007, "File :" + filePath + " does not contains valid camera matrix",
+                                "readFromXML", __FILE__, __LINE__);
+    }
+
+    if (w == -1 || h == 0){
+        fs["image_Width"] >> w;
+        fs["image_Height"] >> h;
+        if (w == -1 || h == 0)
+            throw cv::Exception(9007, "File :" + filePath + " does not contains valid camera dimensions",
+                                "readFromXML", __FILE__, __LINE__);
+    }
+    if (MCamera.type() != CV_32FC1)
+        MCamera.convertTo(CameraMatrix, CV_32FC1);
+    else
+        CameraMatrix = MCamera;
+
+    if (MDist.total() < 4){
+        fs["Distortion_Coefficients"] >> MDist;
+        if (MDist.total() < 4)
+            throw cv::Exception(9007, "File :" + filePath + " does not contains valid distortion_coefficients",
+                                "readFromXML", __FILE__, __LINE__);
+    }
+    // convert to 32 and get the 4 first elements only
+    cv::Mat mdist32;
+    MDist.convertTo(mdist32, CV_32FC1);
+
+    Distorsion.create(1, 5, CV_32FC1);
+    for (int i = 0; i < 5; i++)
+        Distorsion.ptr<float>(0)[i] = mdist32.ptr<float>(0)[i];
+    width = w;
+    height = h;
+}
+
+// void onMouse( int event, int x, int y, int f, void* g)
+// {
+//     cv::Point* P = static_cast<cv::Point*>(g);
+//     switch(event)
+//     {
+//
+//     case  CV_EVENT_LBUTTONDOWN  :
+//
+//                                     P->x=x;
+//                                     P->y=y;
+//                                     std::cout << "CV_EVENT_LBUTTONDOWN: (" << x << ", " << y << ")" << std::endl;
+//                                     break;
+//
+//     case  CV_EVENT_LBUTTONUP    :
+//                                     P->x=x;
+//                                     P->y=y;
+//                                     std::cout << "CV_EVENT_LBUTTONUP: (" << x << ", " << y << ")" << std::endl;
+//                                     //std::cout << P->x << " " << P->y << "\n";
+//                                     break;
+//
+//     default                     :   break;
+//
+//
+//     }
+// }
+
+// void get_pixel_in_polygon(const cv::Mat& img, int polygon_num, cv::Mat& out_img) {
+//     std::vector<std::vector<cv::Point> > polygons;
+//     for (int i = 0; i < polygon_num; ++i) {
+//         std::vector<cv::Point> polygon;
+//         for (int j = 0; j < 4; ++j) {
+//             cv::Point _point_;
+//             cv::imshow("img", img);
+//             cv::setMouseCallback("img", onMouse, &_point_);
+//
+//             cv::waitKey(0);
+//             std::cout << "collecte point: (" << _point_.x << ", " << _point_.y << ")\n";
+//             polygon.push_back(_point_);
+//         }
+//
+//         polygons.push_back(polygon);
+//     }
+//
+//     cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
+//
+//     int count=0;
+//     for (size_t r = 0; r < img.rows; ++r) {
+//         for (size_t c = 0; c < img.cols; ++c) {
+//             for (auto polygon : polygons) {
+//
+//                 if (cv::pointPolygonTest(cv::Mat(polygon), cv::Point(c, r), true) > 0) {
+//                     mask.at<unsigned char>(r, c) = 255;
+//                     count++;
+//                     break;
+//                 }
+//             }
+//
+//         }
+//     }
+//     img.copyTo(out_img, mask);
+// }
+
+int main(int argc, char** argv) {
+    // if (argc < 4) {
+    //     std::cerr << "error params input:" << std::endl;
+    //     std::cerr << "argv[1] = params_file,\n argv[2] = pcd_file\n argv[3] = img_file\n argv[4] = is 40p(default: false) argv[5] = line_num(default: 10)\n";
+    //     return 1;
+    // }
+
+    std::string params_file = argv[1];
+    std::cout << "params_file: " << params_file << std::endl;
+
+    calib::LidarCameraCalibParam lidar_camera_calib_param;
+    load_text_proto_message_file(params_file, lidar_camera_calib_param);
+    if (!lidar_camera_calib_param.has_threed_threed_calib_params()) {
+        return 1;
+    }
+    auto calib_param = lidar_camera_calib_param.threed_threed_calib_params();
+
+    Eigen::Quaterniond qlidarToCamera;
+    qlidarToCamera = Eigen::AngleAxisd(calib_param.initial_yaw() * M_PI / 180., Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(calib_param.initial_pitch() * M_PI / 180., Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(calib_param.initial_roll() * M_PI / 180., Eigen::Vector3d::UnitX());
+
+    Eigen::Matrix3d inital_lidarToCamera = qlidarToCamera.matrix();
+    Eigen::Matrix4d inital_lidarToCamera_transmatrix = Eigen::Matrix4d::Identity();
+    inital_lidarToCamera_transmatrix.topLeftCorner(3, 3) = inital_lidarToCamera;
+    inital_lidarToCamera_transmatrix(0, 3) = calib_param.initial_x();
+    inital_lidarToCamera_transmatrix(1, 3) = calib_param.initial_y();
+    inital_lidarToCamera_transmatrix(2, 3) = calib_param.initial_z();
+
+    std::cout << "inital_lidarToCamera_transmatrix = " << inital_lidarToCamera_transmatrix << std::endl;
+
+    // calib::ImageProcess image_process;
+    // image_process.init(calib_param);
+
+    cv::Mat CameraMatrix, Distorsion;
+    int height, width;
+    readFromXMLFile(calib_param.camera_model_file(), CameraMatrix, Distorsion, width, height);
+    cv::Mat projMat = cv::getOptimalNewCameraMatrix(CameraMatrix, Distorsion, cv::Size(width, height), 0.);
+    cv::Mat camera_projection_matrix = cv::Mat::zeros(3, 4, CV_32F);
+    for (size_t i = 0; i < 3; i++) {
+        for (size_t j = 0; j < 3; j++) {
+            // camera_projection_matrix.at<float>(i, j) = projMat.at<float>(i, j);
+            camera_projection_matrix.at<float>(i, j) = CameraMatrix.at<float>(i, j);
+        }
+    }
+
+    std::string pcd_dir = calib_param.pcd_file_path();//argv[2];
+    std::string img_file = calib_param.img_file_path();
+    bool is_40p = true;
+    if (argc >= 5 && (argv[4] == "true" || argv[4] == "1")) {
+        is_40p = true;
+    }
+    int kLineNum = calib_param.line_num();
+    if (argc >= 6) {
+        kLineNum = atoi(argv[5]);
+    }
+
+    cv::Mat img = cv::imread(img_file);
+
+    //////////////////////
+    cv::Mat gray_image, edge;
+    cv::cvtColor(img, gray_image, CV_BGR2GRAY);
+    cv::blur(gray_image, edge, cv::Size(3, 3));
+    cv::Canny(edge, edge, 100, 230, 3);
+
+    // cv::Mat camera_projection_matrix = image_process.get_camera_projection_matrix();
+    Eigen::Matrix4d lid2cam = inital_lidarToCamera_transmatrix;
+    std::vector<std::vector<double> > lines_param;
+
+    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> lines;
+    calib::CubeEdgeProcess cube_edge(params_file, calib_param.show_pcd());   // path, show
+    cube_edge.find_cube_edge(&lines, true, calib_param.data_40p());    // lines, 10line, is 40p
+
+
+    cv::Mat proj_img;
+    img.copyTo(proj_img);
+    std::cout<<"extr: "<<std::endl;
+    std::cout<<lid2cam<<std::endl;
+
+    double dist = 0.;
+    int pt_num = 0;
+    for (int line_num = 0; line_num < kLineNum; ++line_num) {
+        if (!(line_num == 0 || line_num == 5 || line_num == 6 || line_num == 8)) continue;
+        // if (line_num < 8) continue;
+        cv::Mat select_edge;
+        get_pixel_in_polygon(edge, 1, select_edge);
+        std::vector<cv::Point> line_pts;
+        for (size_t r = 0; r < img.rows; ++r) {
+            for (size_t c = 0; c < img.cols; ++c) {
+                if (select_edge.at<unsigned char>(r, c) > 0) {
+                    line_pts.push_back(cv::Point(c, r));
+                }
+            }
+        }
+        cv::Vec4f line_param;
+        cv::fitLine(line_pts, line_param, CV_DIST_L2, 0, 0.01, 0.01);
+        double A = line_param[1];
+        double B = -line_param[0];
+        double C = -(A * line_param[2] + B * line_param[3]);
+        lines_param.push_back(std::vector<double> {A, B, C});
+        // std::cout << "line_param: " << line_param << "\n";
+        std::cout << "line_param: (" << A << ", " << B << ", " << C << ")" << "\n";
+
+        cv::Point point1, point2;
+        point1.x = 0;
+        point1.y = -(A * 0 + C) / B;
+        point2.x = width;
+        point2.y = -(A * width + C) / B;
+        cv::line(img, point1, point2, cv::Scalar(0, 255, 0), 2, 8, 0);
+        std::cout << "point1: " << point1 << std::endl;
+        std::cout << "point2: " << point2 << std::endl;
+////////////////////////////////////load point cloud/////////////////////////////////////
+        // std::ostringstream oss;
+        // oss << pcd_dir << "/line" << line_num << ".pcd";
+        // pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        // pcl::io::loadPCDFile(oss.str(), *cloud);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
+        cloud = lines[line_num];
+
+        for (auto pt : cloud->points) {
+
+            Eigen::Vector4d l_pt(pt.x, pt.y, pt.z, 1);
+            Eigen::Vector4d c_pt = lid2cam * l_pt;
+            double xp = c_pt(0) / c_pt(2);
+            double yp = c_pt(1) / c_pt(2);
+            double projected_x = camera_projection_matrix.at<float>(0, 0) * xp +
+                                 camera_projection_matrix.at<float>(0, 2);
+            double projected_y = camera_projection_matrix.at<float>(1, 1) * yp +
+                                 camera_projection_matrix.at<float>(1, 2);
+
+            cv::circle(proj_img, cv::Point(projected_x, projected_y), 1, cv::Scalar(0, 255, 0), -1);
+            dist += std::abs((projected_x * A + projected_y * B + C) / std::sqrt(A * A + B * B));
+            pt_num++;
+        }
+    }
+
+    cv::imshow("proj_img", proj_img);
+    cv::waitKey(0);
+
+    std::cout << "reprojection error: " << dist / double(pt_num) << std::endl;
+
+    cv::imshow("img", img);
+    cv::waitKey(0);
+
+    return 0;
+}
+

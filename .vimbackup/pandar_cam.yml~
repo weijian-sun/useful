@@ -1,0 +1,30 @@
+%YAML:1.0
+image_width: 1280
+image_height: 720
+camera_name: something_like_camera_r0_70deg_basler
+camera_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [1517.669231, 0.000000, 603.153334, 0.000000, 1504.731426, 346.130464, 0.000000, 0.000000, 1.000000]
+distortion_model: plumb_bob
+distortion_coefficients: !!opencv-matrix
+   rows: 1
+   cols: 5
+   dt: d
+   data: [ 3.6454231808546169e-03, -2.8222916452528002e-02,
+       7.9219856692841169e-04, 1.3362676038077928e-03,
+       2.8976339371569869e-02 ]
+rectification_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 1., 0., 0., 0., 1., 0., 0., 0., 1. ]
+projection_matrix: !!opencv-matrix
+   rows: 3
+   cols: 4
+   dt: d
+   data: [ 1.3024000244140625e+03, 0., 8.0105784849701740e+02, 0., 0.,
+       1.3048172607421875e+03, 4.4948509350797030e+02, 0., 0., 0., 1.,
+       0. ]
+avg_reprojection_error: 8.1340004857393966e-01

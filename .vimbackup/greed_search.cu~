@@ -1,0 +1,222 @@
+#include <cuda_runtime_api.h>
+#include <Eigen/Eigen>
+#include <pcl/point_cloud.h>
+
+// #include "utils.h"
+
+#define CUDA_PI 3.141592654
+
+/* __device__ void euler2rotation(const float rpy[3], float rot[9]) { */
+/*     float cr = cos(rpy[0]); // * CUDA_PI / 180.); */
+/*     float sr = sin(rpy[0]); // * CUDA_PI / 180.); */
+/*     float cp = cos(rpy[1]); // * CUDA_PI / 180.); */
+/*     float sp = sin(rpy[1]); // * CUDA_PI / 180.); */
+/*     float cy = cos(rpy[2]); // * CUDA_PI / 180.); */
+/*     float sy = sin(rpy[2]); // * CUDA_PI / 180.); */
+/*     rot[0] = cy*cp; */
+/*     rot[1] = cy*sp*sr-sy*cr; */
+/*     rot[2] = cy*sp*cr+sy*sr; */
+/*     rot[3] = sy*cp; */
+/*     rot[4] = sy*sp*sr+cy*cr; */
+/*     rot[5] = sy*sp*cr-cy*sr; */
+/*     rot[6] = -sp; */
+/*     rot[7] = cp*sr; */
+/*     rot[8] = cp*cr; */
+/* } */
+
+
+__device__ void euler2rotation(const float xyz[3], float rot[9]){
+    float cx = cos(xyz[0]);
+    float sx = sin(xyz[0]);
+    float cy = cos(xyz[1]);
+    float sy = sin(xyz[1]);
+    float cz = cos(xyz[2]);
+    float sz = sin(xyz[2]);
+    rot[0] = cy*cz;
+    rot[1] = -cy*sz;
+    rot[2] = sy;
+    rot[3] = sx*sy*cz + cx*sz;
+    rot[4] = -sx*sy*sz + cx*cz;
+    rot[5] = -sx*cy;
+    rot[6] = -sy*cx*cz + sx*sz;
+    rot[7] = sy*cx*sz + sx*cz;
+    rot[8] = cx*cy;
+}
+
+
+
+__device__ void edge_weight_count(unsigned char* img, int width, int height, float* pc, int nr_pc, 
+        float* pm, float* rpyxyz, int* weight) {
+    float rot[9];
+    euler2rotation(rpyxyz, rot);
+    *weight = 0;
+
+    // printf("rpyxyz: %f, %f, %f, %f, %f, %f\n", rpyxyz[0], rpyxyz[1], rpyxyz[2], rpyxyz[3], rpyxyz[4], rpyxyz[5]);
+    // printf("pm: %f, %f, %f, %f, %f, %f, %f, %f, %f\n", pm[0], pm[1], pm[2], pm[3], pm[4], pm[5], pm[6], pm[7], pm[8]);
+    for (int i = 0; i < nr_pc; ++i) {
+        float x = rot[0] * pc[i * 3] + rot[1] * pc[i * 3 + 1] + rot[2] * pc[i * 3 + 2] + rpyxyz[3];
+        float y = rot[3] * pc[i * 3] + rot[4] * pc[i * 3 + 1] + rot[5] * pc[i * 3 + 2] + rpyxyz[4];
+        float z = rot[6] * pc[i * 3] + rot[7] * pc[i * 3 + 1] + rot[8] * pc[i * 3 + 2] + rpyxyz[5];
+        // printf("x: %f, y: %f, z: %f\n", x, y, z);
+        if (z > 0) {
+	        float w = pm[6] * x + pm[7] * y + pm[8] * z;
+	        int px = int((pm[0] * x + pm[1] * y + pm[2] * z) / w);
+	        int py = int((pm[3] * x + pm[4] * y + pm[5] * z) / w);
+            // printf("i: %d, x: %f, y: %f, z: %f, px: %d, py: %d, w: %f\n", i, x, y, z, px, py, w);
+            if (px >= 0 && px < width && py >= 0 && py < height) {
+                *weight += (int)img[py * width + px];
+                // printf("px: %d, py: %d, gray: %d", px, py, img[py * width + px]);
+            }
+            
+        }
+    }
+    //printf("weight: %d \n", *weight);
+
+} 
+
+__global__ void do_search(unsigned char* d_img, int width, int height, float* d_pc, int nr_pc, float* d_pm, 
+        float* d_rpyxyz, float* search_rpyxyz, float* d_step_rt, int* d_weight) {
+
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    int ro_grid = 2 * search_rpyxyz[0] / d_step_rt[0];
+    int pi_grid = 2 * search_rpyxyz[1] / d_step_rt[0];
+    int ya_grid = 2 * search_rpyxyz[2] / d_step_rt[0];
+    int x_grid = 2 * search_rpyxyz[3] / d_step_rt[1];
+    int y_grid = 2 * search_rpyxyz[4] / d_step_rt[1];
+    int z_grid = 2 * search_rpyxyz[5] / d_step_rt[1];
+
+    float id_ya = index % ya_grid;
+    float id_pi = index / ya_grid % pi_grid;
+    float id_ro = index / ya_grid / pi_grid % ro_grid;
+    float id_z = index / ya_grid / pi_grid / ro_grid % z_grid;
+    float id_y = index / ya_grid / pi_grid / ro_grid / z_grid % y_grid;
+    float id_x = index / ya_grid / pi_grid / ro_grid / z_grid / y_grid % x_grid;
+
+    float rpyxyz[6] = {d_rpyxyz[0] + (-search_rpyxyz[0] + d_step_rt[0] * id_ro) * CUDA_PI / 180., 
+                       d_rpyxyz[1] + (-search_rpyxyz[1] + d_step_rt[0] * id_pi) * CUDA_PI / 180.,
+                       d_rpyxyz[2] + (-search_rpyxyz[2] + d_step_rt[0] * id_ya) * CUDA_PI / 180., 
+                       d_rpyxyz[3] - search_rpyxyz[3] + d_step_rt[1] * id_x,
+                       d_rpyxyz[4] - search_rpyxyz[4] + d_step_rt[1] * id_y, 
+                       d_rpyxyz[5] - search_rpyxyz[5] + d_step_rt[1] * id_z};
+    int weight = 0;
+    // printf("rpyxyz: %f, %f, %f, %f, %f, %f\n", rpyxyz[0], rpyxyz[1], rpyxyz[2], rpyxyz[3], rpyxyz[4], rpyxyz[5]);
+    edge_weight_count(d_img, width, height, d_pc, nr_pc, d_pm, rpyxyz, &weight);
+    // printf("weight: %d \n", weight);
+    d_weight[index] = weight;
+    
+    /* printf("%d\n", index); */
+
+}
+
+void greed_search_cu(const unsigned char* img, int width, int height, const float* pc, int nr_pc, 
+        const float* pm, float* init_rpyxyz, float* search_rpyxyz, float* step_rt, float* best_rpyxyz) {
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    cudaError_t cuda_error;
+    int deviceCount = -1;
+    cuda_error = cudaGetDeviceCount(&deviceCount);
+    if (cuda_error != cudaSuccess) {printf("get GPU device count failed\n"); return;}
+    printf("deviceCount: %d \n", deviceCount);
+
+    cudaSetDevice(0);
+    cudaDeviceProp device_properties;
+    cuda_error = cudaGetDeviceProperties(&device_properties, 0);
+    if (cuda_error != cudaSuccess) {printf("get GPU device_properties failed\n"); return;}
+
+    /// copy img
+    unsigned char* d_img;
+    cuda_error = cudaMalloc((void**)&d_img, width * height * sizeof(unsigned char));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMemcpy(d_img, img, width * height * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) {printf("cudaMemcpy failed\n"); return;}
+
+    /// copy pointcloud
+    float* d_pc;
+    cuda_error = cudaMalloc((void**)&d_pc, nr_pc * 3 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMemcpy(d_pc, pc, nr_pc * 3 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+
+    /// copy progection_matrix
+    float* d_pm;
+    cuda_error = cudaMalloc((void**)&d_pm, 9 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMemcpy(d_pm, pm, 9 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+
+    int ro_grid = 2 * search_rpyxyz[0] / step_rt[0];
+    int pi_grid = 2 * search_rpyxyz[1] / step_rt[0];
+    int ya_grid = 2 * search_rpyxyz[2] / step_rt[0];
+    int x_grid = 2 * search_rpyxyz[3] / step_rt[1];
+    int y_grid = 2 * search_rpyxyz[4] / step_rt[1];
+    int z_grid = 2 * search_rpyxyz[5] / step_rt[1];
+    int loop_num = x_grid * y_grid * z_grid * ro_grid * pi_grid * ya_grid;
+
+    int* d_weight;
+    cuda_error = cudaMalloc((void**)&d_weight, loop_num * sizeof(int));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    float* d_search_rpyxyz;
+    float* d_step_rt;
+    float* d_rpyxyz;
+    cuda_error = cudaMalloc((void**)&d_search_rpyxyz, 6 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMalloc((void**)&d_step_rt, 2 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMalloc((void**)&d_rpyxyz, 6 * sizeof(float));
+    if (cuda_error != cudaSuccess) {printf("cudaMalloc failed\n"); return;}
+    cuda_error = cudaMemcpy(d_search_rpyxyz, search_rpyxyz, 6 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+    cuda_error = cudaMemcpy(d_step_rt, step_rt, 2 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+    cuda_error = cudaMemcpy(d_rpyxyz, init_rpyxyz, 6 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+
+    int nblocks = (loop_num + device_properties.maxThreadsPerBlock - 1) / device_properties.maxThreadsPerBlock;
+    nblocks = 64535;
+    printf("begin do search! nblocks: %d, device_properties.maxThreadsPerBlock: %d \n", nblocks, device_properties.maxThreadsPerBlock);
+    printf("device_properties.maxGridSize[0-2]: %d, %d %d\n", device_properties.maxGridSize[0], device_properties.maxGridSize[1], device_properties.maxGridSize[2]);
+    do_search<<<nblocks, device_properties.maxThreadsPerBlock>>> (d_img, width, height, d_pc, 
+            nr_pc, d_pm, d_rpyxyz, d_search_rpyxyz, d_step_rt, d_weight);
+
+    cudaDeviceSynchronize();
+    int* weight;
+    weight = (int*)malloc(loop_num * sizeof(int));
+    cuda_error = cudaMemcpy(weight, d_weight, loop_num * sizeof(int), cudaMemcpyDeviceToHost);
+    if (cuda_error != cudaSuccess) { printf("cudaMemcpy failed\n"); return;}
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    int index_max = 0;
+    int max_weight = 0;
+    // printf("loop_num: %d", loop_num);
+    for (int i = 0; i < loop_num; ++i) {
+        if (max_weight < weight[i]) {
+            max_weight = weight[i];
+            index_max = i;
+        }
+    }
+    std::cout << "index_max: " << index_max << ", max_weight: " << max_weight << '\n';
+    float id_ya = index_max % ya_grid;
+    float id_pi = index_max / ya_grid % pi_grid;
+    float id_ro = index_max / ya_grid / pi_grid % ro_grid;
+    float id_z = index_max / ya_grid / pi_grid / ro_grid % z_grid;
+    float id_y = index_max / ya_grid / pi_grid / ro_grid / z_grid % y_grid;
+    float id_x = index_max / ya_grid / pi_grid / ro_grid / z_grid / y_grid % x_grid;
+
+    best_rpyxyz[0] = init_rpyxyz[0] + (-search_rpyxyz[0] + step_rt[0] * id_ro) * CUDA_PI / 180.;
+    best_rpyxyz[1] = init_rpyxyz[1] + (-search_rpyxyz[1] + step_rt[0] * id_pi) * CUDA_PI / 180.;
+    best_rpyxyz[2] = init_rpyxyz[2] + (-search_rpyxyz[2] + step_rt[0] * id_ya) * CUDA_PI / 180.;
+    best_rpyxyz[3] = init_rpyxyz[3] -search_rpyxyz[3] + step_rt[1] * id_x;
+    best_rpyxyz[4] = init_rpyxyz[4] -search_rpyxyz[4] + step_rt[1] * id_y;
+    best_rpyxyz[5] = init_rpyxyz[5] -search_rpyxyz[5] + step_rt[1] * id_z;
+
+    free(weight);
+    cudaFree(d_img);
+    cudaFree(d_pc);
+    cudaFree(d_pm);
+    cudaFree(d_weight);
+    cudaFree(d_search_rpyxyz);
+    cudaFree(d_step_rt);
+    cudaFree(d_rpyxyz);
+}
+

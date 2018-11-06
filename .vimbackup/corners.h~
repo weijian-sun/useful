@@ -1,0 +1,150 @@
+#ifndef CAM_LIDAR_CALIB_CORNERS_H
+#define CAM_LIDAR_CALIB_CORNERS_H
+
+#include <cstdlib>
+#include <cstdio>
+#include <iostream>
+#include <map>
+#include <fstream>
+#include <cmath>
+
+#include <opencv2/opencv.hpp>
+
+#include <Eigen/Eigen>
+
+#include <pcl/point_cloud.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/common/eigen.h>
+#include <pcl/common/transforms.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/sample_consensus/ransac.h>
+#include <pcl/sample_consensus/sac_model_line.h>
+#include <pcl/sample_consensus/sac_model_plane.h>
+#include <pcl/common/intersections.h>
+
+
+#include "perception/cam_lidar_calib/3d_3d_calib/utils.h"
+#include "perception/cam_lidar_calib/3d_3d_calib/connected_components.h"
+
+
+void getCorners(cv::Mat img, pcl::PointCloud<pcl::PointXYZ> scan, cv::Mat P, int num_of_markers,
+        std::vector<Eigen::Vector3d>* points);
+
+void get_marker_clouds(cv::Mat img, pcl::PointCloud<pcl::PointXYZ> scan, cv::Mat P, 
+        int num_of_markers, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>* marker_clouds);
+
+template <typename PointT>
+void get_marker_clouds(cv::Mat img, typename pcl::PointCloud<PointT>::Ptr& scan, cv::Mat P, 
+        int num_of_markers, int noise_max_area, 
+        std::vector<typename pcl::PointCloud<PointT>::Ptr>* marker_clouds,
+        std::vector<float>* plane_params) {
+
+    std::vector<std::vector<cv::Point> > stored_corners;
+    /*Masking happens here */
+    cv::Mat edge_mask = cv::Mat::zeros(img.size(), CV_8UC1);
+    //edge_mask(cv::Rect(520, 205, 300, 250))=1;
+    edge_mask(cv::Rect(0, 0, img.cols, img.rows))=1;
+    img.copyTo(edge_mask, edge_mask);
+
+    img = edge_mask;
+
+    cv::Rect frame(0, 0, img.cols, img.rows);
+    // std::cout << "img size : " << img.rows << ", " << img.cols << std::endl;
+
+    cv::Mat image_edge_laser = project<PointT>(P, frame, *scan, NULL);
+    // std::cout << "project image_edge_laser size : " << image_edge_laser.rows << ", " << image_edge_laser.cols << std::endl;
+    cv::threshold(image_edge_laser, image_edge_laser, 10, 255, 0);
+
+    cv::Mat combined_rgb_laser;
+    std::vector<cv::Mat> rgb_laser_channels;
+
+    std::map<std::pair<int, int>, size_t> c2D_to_3D;
+
+    /* store correspondences */
+    for(size_t i = 0; i < scan->points.size(); ++i) {
+        PointT& pt = (scan->points)[i];
+        // behind the camera
+        if (pt.z < 0) {
+            continue;
+        }
+
+        cv::Point xy = project(pt, P);
+        if (xy.inside(frame)) {
+            /// create a map of 2D and 3D points
+            c2D_to_3D[std::pair<int, int>(xy.x, xy.y)] = i;
+        }
+    }
+
+    cv::namedWindow("marker_cloud", cv::WINDOW_NORMAL);
+    cv::namedWindow("marker_polygon", cv::WINDOW_NORMAL); 
+
+    cv::Mat label_img;
+    ConnectedComponents connected_omponents;
+    int components_num = connected_omponents.calculate_connected_components(image_edge_laser, &label_img);
+
+    for(int q = 0; q < num_of_markers; q++) {
+        std::cout << "---------Moving on to next marker--------\n";
+        cv::Point _point_;
+        std::vector<cv::Point> polygon;
+        int collected = 0;
+        typename pcl::PointCloud<PointT>::Ptr marker(new pcl::PointCloud<PointT>);
+        while(collected != 4) {
+            cv::imshow("marker_cloud", image_edge_laser);
+            cv::setMouseCallback("marker_cloud", onMouse, &_point_);
+
+            cv::waitKey(0);
+            ++collected;
+            polygon.push_back(_point_);
+        }
+
+        rgb_laser_channels.clear();
+        rgb_laser_channels.push_back(image_edge_laser);
+        rgb_laser_channels.push_back(cv::Mat::zeros(image_edge_laser.size(), CV_8UC1));
+        rgb_laser_channels.push_back(cv::Mat::zeros(image_edge_laser.size(), CV_8UC1));
+        cv::merge(rgb_laser_channels, combined_rgb_laser);
+
+        for(auto it=c2D_to_3D.begin(); it!=c2D_to_3D.end(); ++it) {
+            int point_label = label_img.at<unsigned char>(it->first.second, it->first.first);
+            if (cv::pointPolygonTest(cv::Mat(polygon), cv::Point(it->first.first, it->first.second), true) > 0 && 
+                    connected_omponents.component_area(point_label) >= noise_max_area) {
+                marker->push_back((scan->points)[it->second]);
+                cv::rectangle(combined_rgb_laser, 
+                              cv::Point(it->first.first, it->first.second), 
+                              cv::Point(it->first.first, it->first.second), 
+                              cv::Scalar(0, 0, 255), 3, 8, 0); // RED point
+            }
+        }
+
+        cv::imshow("marker_polygon", combined_rgb_laser);
+        cv::waitKey(4);
+
+        Eigen::VectorXf plane_model;
+        std::vector<int> inliers;
+        typename pcl::SampleConsensusModelPlane<PointT>::Ptr model_l(
+                new pcl::SampleConsensusModelPlane<PointT> (marker));
+
+        pcl::RandomSampleConsensus<PointT> ransac(model_l);
+        ransac.setDistanceThreshold (0.05);
+        ransac.computeModel();
+        ransac.getInliers(inliers);
+        ransac.getModelCoefficients(plane_model);
+        plane_model *= plane_model(2) > 0 ? -1 : 1;
+        plane_params->push_back(plane_model(0));
+        plane_params->push_back(plane_model(1));
+        plane_params->push_back(plane_model(2));
+        plane_params->push_back(plane_model(3));
+        std::cout << "plane_model: " << plane_model << std::endl;
+
+        typename pcl::PointCloud<PointT>::Ptr final_cloud (new pcl::PointCloud<PointT>);
+
+        for (auto pt : marker->points) {
+            PointT project_pt = calculate_plane_projecttion_point<PointT>(pt, plane_model);
+            final_cloud->push_back(project_pt);
+        }
+        std::cout << "final_cloud.size() = " << final_cloud->size() << std::endl;
+        marker_clouds->push_back(final_cloud);
+
+    }
+}
+
+#endif // CAM_LIDAR_CALIB_CORNERS_H

@@ -1,0 +1,166 @@
+syntax = "proto2";
+
+package calib;
+
+message F0InitXyzRt{
+    optional float initial_x_rot = 1 [default = 90];
+    optional float initial_y_rot = 2 [default = 0];
+    optional float initial_z_rot = 3 [default = 90];
+
+    optional float initial_x = 4 [default = 0];
+    optional float initial_y = 5 [default = 0];
+    optional float initial_z = 6 [default = 0];
+    optional float z_rot = 7 [default = 0];
+}
+
+
+message B0InitXyzRt{
+    optional float initial_x_rot = 1 [default = 90];
+    optional float initial_y_rot = 2 [default = 0];
+    optional float initial_z_rot = 3 [default = -90];
+
+    optional float initial_x = 4 [default = 0];
+    optional float initial_y = 5 [default = 0];
+    optional float initial_z = 6 [default = 0];
+    optional float z_rot = 7 [default = 180];
+}
+
+
+message L0InitXyzRt{
+    optional float initial_x_rot = 1 [default = 90];
+    optional float initial_y_rot = 2 [default = 0];
+    optional float initial_z_rot = 3 [default = 30];
+
+    optional float initial_x = 4 [default = 0];
+    optional float initial_y = 5 [default = 0];
+    optional float initial_z = 6 [default = 0];
+    optional float z_rot = 7 [default = -60];
+}
+
+
+message TLInitXyzRt{
+    optional float initial_x_rot = 1 [default = -90];
+    optional float initial_y_rot = 2 [default = -90];
+    optional float initial_z_rot = 3 [default = 0];
+
+    optional float initial_x = 4 [default = 0];
+    optional float initial_y = 5 [default = 0];
+    optional float initial_z = 6 [default = 0];
+    optional float z_rot = 7 [default = 0];
+}
+
+
+message R0InitXyzRt{
+    optional float initial_x_rot = 1 [default = 90];
+    optional float initial_y_rot = 2 [default = 0];
+    optional float initial_z_rot = 3 [default = 150];
+
+    optional float initial_x = 4 [default = 0];
+    optional float initial_y = 5 [default = 0];
+    optional float initial_z = 6 [default = 0];
+    optional float z_rot = 7 [default = 60];
+}
+
+
+message R1InitXyzRt{
+    optional float initial_x_rot = 1 [default = 90];
+    optional float initial_y_rot = 2 [default = 0];
+    optional float initial_z_rot = 3 [default = 210];
+
+    optional float initial_x = 4 [default = 0];
+    optional float initial_y = 5 [default = 0];
+    optional float initial_z = 6 [default = 0];
+    optional float z_rot = 7 [default = 120];
+}
+
+
+message L1InitXyzRt{
+    optional float initial_x_rot = 1 [default = 90];
+    optional float initial_y_rot = 2 [default = 0];
+    optional float initial_z_rot = 3 [default = -30];
+
+    optional float initial_x = 4 [default = 0];
+    optional float initial_y = 5 [default = 0];
+    optional float initial_z = 6 [default = 0];
+    optional float z_rot = 7 [default = -120];
+}
+
+
+message ROI{
+    optional float lidar_roi_x_min = 1 [default = 4.0];
+    optional float lidar_roi_x_max = 2 [default = 150.0];
+    optional float lidar_roi_y_min = 3 [default = -10.0];
+    optional float lidar_roi_y_max = 4 [default = 10.0];
+    optional float lidar_roi_z_min = 5 [default = -1000.0];
+    optional float lidar_roi_z_max = 6 [default = 1000.0];
+}
+
+
+message SearchHighPre{
+    optional float search_x_r = 1 [default = 1.0];
+    optional float search_y_r = 2 [default = 1.0];
+    optional float search_z_r = 3 [default = 1.0];
+    optional float search_x = 4 [default = 0.2];
+    optional float search_y = 5 [default = 0.2];
+    optional float search_z = 6 [default = 0.2];
+    optional float step_r = 7 [default = 0.05];
+    optional float step_t = 8 [default = 0.01];
+}
+
+
+message SearchLowPre{
+    optional float search_x_r = 1 [default = 5.0];
+    optional float search_y_r = 2 [default = 5.0];
+    optional float search_z_r = 3 [default = 5.0];
+    optional float search_x = 4 [default = 1];
+    optional float search_y = 5 [default = 1];
+    optional float search_z = 6 [default = 1];
+    optional float step_r = 7 [default = 0.2];
+    optional float step_t = 8 [default = 0.1];
+}
+
+
+message CommonParam{
+    optional string camera_model_file = 1 [default = 'CAM.yml'];
+    required string data_prefix = 2 ;
+    required string channel = 3;
+    optional string pcd_file_ext = 4 [default = '.pcd'];
+    optional string pcd_crop_ext = 5 [default = '_crop.pcd'];
+    optional string pcd_line_file_ext = 6 [default = '_line.pcd'];
+    optional string pcd_dense_line_file_ext = 7 [default = '_dense_line.pcd'];
+    optional string pcd_gd_search_file_ext = 8 [default = '_dense_line.pcd'];
+    optional string img_file_ext = 9 [default = '.png'];
+    optional int32 device_num = 10 [default = 0];
+    optional bool show_project = 11 [default = true];
+    optional bool high_pre = 12 [default = false]; 
+    optional int32 line_num = 13 [default = 10];
+    optional bool show_pcd = 14 [default = true];
+    optional bool data_40p = 15 [default = false];
+    optional int32 frames = 16 [default = 1];
+}
+
+message ViewerParam{
+    optional float initial_x_rot = 1;
+    optional float initial_y_rot = 2;
+    optional float initial_z_rot = 3;
+
+    optional float initial_x = 4;
+    optional float initial_y = 5;
+    optional float initial_z = 6;
+}
+
+message LidarCameraCalibParam {
+    optional string algorithm = 1;
+    optional CommonParam common_param= 2;
+    optional F0InitXyzRt f0_init_xyz_rt = 3;
+    optional B0InitXyzRt b0_init_xyz_rt = 4;
+    optional L0InitXyzRt l0_init_xyz_rt = 5;
+    optional TLInitXyzRt tl_init_xyz_rt = 6;
+    optional R0InitXyzRt r0_init_xyz_rt = 7;
+    optional R1InitXyzRt r1_init_xyz_rt = 8;
+    optional L1InitXyzRt l1_init_xyz_rt = 9;
+    optional ROI roi = 10;
+    optional SearchHighPre search_high_pre = 11;
+    optional SearchLowPre search_low_pre = 12;
+    optional ViewerParam viewer_param = 13;
+}

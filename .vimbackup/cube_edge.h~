@@ -1,0 +1,110 @@
+/***************************************************************************
+ *
+ * Copyright (c) 2018 Alibaba-inc.com, Inc. All Rights Reserved
+ * $Id$
+ *
+ **************************************************************************/
+
+ /**
+ * @file cube_edge.h
+ * @author Weijian Sun(weijian.swj@alibaba-inc.com)
+ **/
+
+
+#include <iostream>
+#include <pcl/filters/passthrough.h>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/sample_consensus/method_types.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/console/parse.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
+#include <pcl/sample_consensus/ransac.h>
+#include <pcl/sample_consensus/sac_model_plane.h>
+#include <pcl/sample_consensus/sac_model_sphere.h>
+#include <pcl/visualization/pcl_visualizer.h>
+
+#include <pcl/common/common_headers.h>
+#include <pcl/features/normal_3d.h>
+
+#include <boost/thread/thread.hpp>
+#include <limits.h>
+#include <eigen3/Eigen/Dense>
+#include <eigen3/Eigen/Core>
+#include <eigen3/Eigen/Geometry>
+#include <eigen3/Eigen/Eigenvalues>
+#include <opencv2/opencv.hpp>
+#include <opencv2/core/eigen.hpp>
+#include "lidar_cam_calib/proto/calib_param.pb.h"
+#include <google/protobuf/text_format.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include "common/common.h"
+
+
+namespace calib{
+
+boost::shared_ptr<pcl::visualization::PCLVisualizer> simpleVis(pcl::PointCloud<pcl::PointXYZ>::ConstPtr cloud);
+
+class CubeEdgeProcess{
+
+private:
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr crop(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, std::vector<double> region = std::vector<double>{4.0, -8.0, -1000, 150.0, 8.0, 1000});
+
+    void trans_40p(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud);
+    void trans_40p_back(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud);
+
+    void trans(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud);
+
+    double point2planedistance(pcl::PointXYZ pt, pcl::ModelCoefficients::Ptr coefficients);
+
+    double point2planedistance(pcl::PointXYZ pt, Eigen::Vector4d coefficients);
+
+    double point_to_plane_fitting_error(std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>planes_points, std::vector<Eigen::Vector4d>planes);
+
+    std::vector<int>generate_idx(int n, int m);
+
+    Eigen::Vector3d vec_to_eig(pcl::PointXYZ point);
+
+    pcl::PointXYZ eigen_to_pointxyz(Eigen::Vector3d point);
+
+    Eigen::Vector2d max_eigen_vector(Eigen::MatrixXd ATA);
+
+    Eigen::Vector3d generate_point(Eigen::Vector4d plane_coeffi);
+
+    Eigen::Vector4d get_plane_from_norm_point(Eigen::Vector3d norm, Eigen::Vector3d point);
+
+    Eigen::Vector3d coor_trans(Eigen::Vector3d point_in, Eigen::Matrix4d trans);
+
+    std::vector<float> cal_mean(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud);
+
+    pcl::ModelCoefficients eigen_to_model_coeff(Eigen::Vector4d plane);
+
+    void save_pcl(pcl::PointCloud<pcl::PointXYZ>::Ptr line, std::string path);
+
+    void load_text_proto_message_file(const std::string& path, google::protobuf::Message& msg);
+
+    boost::shared_ptr<pcl::visualization::PCLVisualizer> rgbVis (pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr cloud);
+
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr generate_plane(Eigen::Vector4d coefficients);
+
+private:
+    std::string params_file;
+
+    Eigen::Matrix3d trans_mat;
+
+    calib::LidarCameraCalibParam lidar_camera_calib_param;
+
+public:
+    CubeEdgeProcess(std::string path);
+
+    ~CubeEdgeProcess(){};
+
+    bool find_cube_edge(std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> *lines);
+
+};
+
+} //namespace calib
+

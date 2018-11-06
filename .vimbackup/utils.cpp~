@@ -1,0 +1,111 @@
+/***************************************************************************
+ *
+ * Copyright (c) 2018 Alibaba-inc.com, Inc. All Rights Reserved
+ * $Id$
+ *
+ **************************************************************************/
+
+ /**
+ * @file utils.cpp
+ * @author lifangzhen(fangzhen.lfz@alibaba-inc.com)
+ * @date 2018/07/04 21:00:46
+ * @version $Revision$
+ * @brief
+ *
+ **/
+
+#include "lidar_cam_calib/utils.h"
+
+
+void onMouse( int event, int x, int y, int f, void* g)
+{
+	cv::Point* P = static_cast<cv::Point*>(g);
+	switch(event)
+	{
+
+	case  CV_EVENT_LBUTTONDOWN  :
+
+									P->x=x;
+									P->y=y;
+                                    std::cout << "CV_EVENT_LBUTTONDOWN: (" << x << ", " << y << ")" << std::endl;
+									break;
+
+	case  CV_EVENT_LBUTTONUP    :
+									P->x=x;
+									P->y=y;
+                                    std::cout << "CV_EVENT_LBUTTONUP: (" << x << ", " << y << ")" << std::endl;
+									//std::cout << P->x << " " << P->y << "\n";
+									break;
+
+	default                     :   break;
+
+
+	}
+}
+
+
+float reproject_error_in_pixel(const std::vector<Eigen::Vector3d>& camera,
+        const std::vector<Eigen::Vector3d>& lidar,
+        const Eigen::Matrix4d& trans, const cv::Mat& projection_matrix) {
+
+    if (camera.size() != lidar.size()) {
+        return -1.f;
+    }
+
+    float reproject_error = 0.f;
+    for (size_t i = 0; i < lidar.size(); ++i) {
+        Eigen::Vector4d homogeneous_pt(lidar[i](0), lidar[i](1), lidar[i](2), 1);
+        Eigen::Vector4d trans_pt = trans * homogeneous_pt;
+
+        pcl::PointXYZ pt(trans_pt(0), trans_pt(1), trans_pt(2));
+        cv::Point lidar_cv_pt = project<pcl::PointXYZ>(pt, projection_matrix);
+
+        pt.x = camera[i](0);
+        pt.y = camera[i](1);
+        pt.z = camera[i](2);
+        cv::Point cam_cv_pt = project<pcl::PointXYZ>(pt, projection_matrix);
+
+        reproject_error += std::sqrt(std::pow(lidar_cv_pt.x - cam_cv_pt.x, 2) +
+                                     std::pow(lidar_cv_pt.y - cam_cv_pt.y, 2));
+    }
+
+    return reproject_error / camera.size();
+}
+
+void get_pixel_in_polygon(const cv::Mat& img, int polygon_num, cv::Mat& out_img) {
+    std::vector<std::vector<cv::Point> > polygons;
+    for (int i = 0; i < polygon_num; ++i) {
+        std::vector<cv::Point> polygon;
+        for (int j = 0; j < 4; ++j) {
+            cv::Point _point_;
+            cv::imshow("img", img);
+            cv::setMouseCallback("img", onMouse, &_point_);
+
+            cv::waitKey(0);
+            std::cout << "collecte point: (" << _point_.x << ", " << _point_.y << ")\n";
+            polygon.push_back(_point_);
+        }
+
+        polygons.push_back(polygon);
+    }
+
+    cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
+
+    int count=0;
+    for (size_t r = 0; r < img.rows; ++r) {
+        for (size_t c = 0; c < img.cols; ++c) {
+            for (auto polygon : polygons) {
+
+                if (cv::pointPolygonTest(cv::Mat(polygon), cv::Point(c, r), true) > 0) {
+                    mask.at<unsigned char>(r, c) = 255;
+                    count++;
+                    break;
+                }
+            }
+
+        }
+    }
+    img.copyTo(out_img, mask);
+}
+
+

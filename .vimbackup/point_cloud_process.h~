@@ -1,0 +1,80 @@
+/***************************************************************************
+ *
+ * Copyright (c) 2018 Alibaba-inc.com, Inc. All Rights Reserved
+ * $Id$
+ *
+ **************************************************************************/
+
+ /**
+ * @file point_cloud_process.h
+ * @author lifangzhen(fangzhen.lfz@alibaba-inc.com)
+ * @author Weijian Sun(weijian.swj@alibaba-inc.com)
+ *
+ **/
+#ifndef CAM_LIDAR_CALIB_POINT_CLOUD_PROCESS_H
+#define CAM_LIDAR_CALIB_POINT_CLOUD_PROCESS_H
+
+#include <string>
+#include <map>
+#include <iostream>
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
+#include "common/common.h"
+#include "lidar_cam_calib/proto/calib_param.pb.h"
+
+namespace calib {
+
+class PointCloudProcess {
+public:
+    PointCloudProcess() {};
+    ~PointCloudProcess() {};
+
+    bool init(const calib::ThreeD2ThreeDCalibParam& calib_param);
+
+    // bool pointcloud_subscriber(pcl::PointCloud<hadutils::PCLVelodyne>::Ptr* cloud);
+
+    // pcl::PointCloud<hadutils::PCLVelodyne>::Ptr last_cloud() {
+    //     return last_cloud_;
+    // }
+
+    // bool get_roi_cloud(pcl::PointCloud<hadutils::PCLVelodyne>::Ptr* cloud);
+
+    // bool calculate_edge_cloud(pcl::PointCloud<hadutils::PCLVelodyne>::Ptr& in_cloud,
+    //         pcl::PointCloud<hadutils::PCLVelodyne>::Ptr* edge_cloud, bool is_camera_coordinate = false);
+
+    // bool calculate_edge_by_ring(pcl::PointCloud<hadutils::PCLVelodyne>::Ptr& in_cloud,
+            // pcl::PointCloud<hadutils::PCLVelodyne>::Ptr* edge_cloud);
+
+    // bool plane_fitting(std::vector<std::string>& files,
+    //         std::map<int, std::vector<float> >* plane_params,
+    //         std::map<int, Eigen::MatrixXd>* plane_pts);
+
+private:
+    // void pointcloud_callback(const lcm::ReceiveBuffer* [>rbuf<],
+    //                          const std::string& [>channel<], const had::pointcloud_t* pc_msg);
+
+    // bool is_in_roi(const hadutils::PCLVelodyne& pt);
+
+private:
+    std::string channel_name_;
+    // int superposition_frame_num_;
+    // int frame_num_;
+    // had::perception::HadLCM* lcm_;
+    // hadutils::hadLCM lcm_;
+
+    pcl::PointCloud<hadutils::PCLVelodyne>::Ptr cloud_;
+    // pcl::PointCloud<hadutils::PCLVelodyne>::Ptr last_cloud_;
+    // float distance_threshold_;
+
+    // float roi_x_min_;
+    // float roi_x_max_;
+    // float roi_y_min_;
+    // float roi_y_max_;
+    // float roi_z_min_;
+    // float roi_z_max_;
+};
+
+} // namespace calib
+
+#endif  // CAM_LIDAR_CALIB_POINT_CLOUD_PROCESS_H
+

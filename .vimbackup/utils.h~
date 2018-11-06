@@ -1,0 +1,304 @@
+#ifndef CAM_LIDAR_CALIB_UTILS_H
+#define CAM_LIDAR_CALIB_UTILS_H
+
+#include <cstdlib>
+#include <cstdio>
+#include <iostream>
+#include <map>
+#include <fstream>
+#include <cmath>
+
+#include <opencv2/opencv.hpp>
+#include <pcl/point_cloud.h>
+#include <pcl/io/pcd_io.h>
+
+#include <pcl/common/eigen.h>
+#include <pcl/common/transforms.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/sample_consensus/ransac.h>
+#include <pcl/sample_consensus/sac_model_line.h>
+#include <pcl/common/intersections.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+
+#include "common/common.h"
+
+
+void onMouse( int event, int x, int y, int f, void* g);
+
+/// \brief Get jet color spectrum from a scalar between [0, 1]. Scalar value
+//         greater than 1.0 will be truncated.
+inline void get_jet_color(float scalar_0_1, cv::Vec3b &rgb)
+{
+    scalar_0_1 = std::min(scalar_0_1, 1.f);
+    float segf = scalar_0_1 / 0.25f;
+    int seg = std::floor(segf);
+    int frac = std::floor(255 * (segf - seg)); //fractional part from 0 to 255
+    switch(seg)
+    {
+        case 0: rgb.val[0] = 255; rgb.val[1] = frac; rgb.val[2] = 0; break;
+        case 1: rgb.val[0] = 255 - frac; rgb.val[1] = 255; rgb.val[2] = 0; break;
+        case 2: rgb.val[0] = 0; rgb.val[1] = 255; rgb.val[2] = frac; break;
+        case 3: rgb.val[0] = 0; rgb.val[1] = 255 - frac; rgb.val[2] = 255; break;
+        case 4: rgb.val[0] = 0; rgb.val[1] = 0; rgb.val[2] = 255; break;
+    }
+}
+
+template <typename PointT>
+void transform(const Eigen::Matrix4d& trans, typename pcl::PointCloud<PointT>::Ptr& cloud) {
+	for (auto pt = cloud->points.begin(); pt < cloud->points.end(); pt++) {
+        Eigen::Vector4d new_pt(pt->x, pt->y, pt->z, 1);
+        new_pt = trans * new_pt;
+        pt->x = new_pt(0);
+        pt->y = new_pt(1);
+        pt->z = new_pt(2);
+	}
+}
+
+
+template <typename PointT>
+cv::Point project(const PointT &pt, const cv::Mat &projection_matrix) {
+	//cv::Point2f xy = projectf(pt, projection_matrix);
+	cv::Mat pt_3D(4, 1, CV_32FC1);
+
+	pt_3D.at<float>(0) = pt.x;
+	pt_3D.at<float>(1) = pt.y;
+	pt_3D.at<float>(2) = pt.z;
+	pt_3D.at<float>(3) = 1.0f;
+
+	cv::Mat pt_2D = projection_matrix * pt_3D;
+
+	float w = pt_2D.at<float>(2);
+	float x = pt_2D.at<float>(0) / w;
+	float y = pt_2D.at<float>(1) / w;
+	return cv::Point(x, y);
+}
+
+template <typename PointT>
+cv::Mat project(cv::Mat projection_matrix, cv::Rect frame,
+                typename pcl::PointCloud<PointT> point_cloud,
+                typename pcl::PointCloud<PointT> *visible_points) {
+	cv::Mat plane = cv::Mat::zeros(frame.size(), CV_32FC1);
+
+	for (auto pt = point_cloud.points.begin(); pt < point_cloud.points.end(); pt++)
+	{
+
+	    // behind the camera
+	    if (pt->z < 0)
+	    {
+	    	continue;
+	    }
+
+	    //float intensity = pt->intensity;
+	    cv::Point xy = project<PointT>(*pt, projection_matrix);
+	    if (xy.inside(frame))
+	    {
+	    	if (visible_points != NULL)
+	    	{
+	    	    visible_points->push_back(*pt);
+	    	}
+
+	    	//cv::circle(plane, xy, 3, intensity, -1);
+	    	//plane.at<float>(xy) = intensity;
+	    	plane.at<float>(xy)=250;
+	    }
+	}
+
+	cv::Mat plane_gray;
+	cv::normalize(plane, plane_gray, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+	cv::dilate(plane_gray, plane_gray, cv::Mat());
+
+	return plane_gray;
+}
+
+template <typename PointT>
+cv::Mat project(cv::Mat projection_matrix, typename pcl::PointCloud<PointT>::Ptr point_cloud,
+                cv::Mat orig_img, int r, int g, int b) {
+	cv::Mat img;
+    orig_img.copyTo(img);
+
+    cv::Rect frame(0, 0, img.cols, img.rows);
+
+    for (auto pt : point_cloud->points) {
+        if (pt.z < 0) {
+            continue;
+        }
+
+	    cv::Point xy = project<PointT>(pt, projection_matrix);
+	    if (xy.inside(frame))
+	    {
+            // std::cout << "img size: " << img.size() << ", xy = " << xy << std::endl;
+            // std::cout << "img_value: img.at<cv::Vec3b>(xy)[0] = " << img.at<cv::Vec3b>(xy)[0] << std::endl;
+            // std::cout << "img_value: img.at<cv::Vec3b>(xy)[1] = " << img.at<cv::Vec3b>(xy)[1] << std::endl;
+            // std::cout << "img_value: img.at<cv::Vec3b>(xy)[2] = " << img.at<cv::Vec3b>(xy)[2] << std::endl;
+            double dist = std::sqrt(pt.x * pt.x + pt.y * pt.y + pt.z * pt.z);
+            cv::Vec3b clr;
+            get_jet_color(dist / 70., clr);
+            std::swap(clr[0], clr[2]);  // From rgb to bgr
+            img.at<cv::Vec3b>(xy) = clr;
+
+	    	// img.at<cv::Vec3b>(xy)[0] = (unsigned char)b;
+	    	// img.at<cv::Vec3b>(xy)[1] = (unsigned char)g;
+	    	// img.at<cv::Vec3b>(xy)[2] = (unsigned char)r;
+	    }
+    }
+
+    return img;
+}
+
+cv::Mat project(cv::Mat projection_matrix, pcl::PointCloud<pcl::PointXYZ>::Ptr point_cloud,
+                cv::Mat orig_img, int r, int g, int b);
+
+template <typename PointT>
+PointT calculate_plane_projecttion_point(const PointT& pt, const Eigen::VectorXf& plane_model) {
+    float a = plane_model(0);
+    float b = plane_model(1);
+    float c = plane_model(2);
+    float d = plane_model(3);
+
+    float t = (a * pt.x + b * pt.y + c * pt.z + d) / (a * a + b * b + c * c);
+    PointT project_pt = pt;
+    project_pt.x = pt.x - a * t;
+    project_pt.y = pt.y - b * t;
+    project_pt.z = pt.z - c * t;
+
+
+    return project_pt;
+}
+
+template <typename PointT>
+int edge_weight_count(const cv::Mat& img, const typename pcl::PointCloud<PointT>::Ptr& edge_cloud,
+        const cv::Mat projection_matrix, const double* rpy, const double* t) {
+    Eigen::Quaterniond q;
+    // q = Eigen::AngleAxisd(rpy[2], Eigen::Vector3d::UnitZ()) *
+    //     Eigen::AngleAxisd(rpy[1], Eigen::Vector3d::UnitY()) *
+    //     Eigen::AngleAxisd(rpy[0], Eigen::Vector3d::UnitX());
+
+    q = Eigen::AngleAxisd(rpy[0] * M_PI / 180.0, Eigen::Vector3d::UnitX()) *
+        Eigen::AngleAxisd(rpy[1] * M_PI / 180.0, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(rpy[2] * M_PI / 180.0, Eigen::Vector3d::UnitZ());
+
+    Eigen::Matrix4d trans;
+    trans.topLeftCorner(3, 3) = q.matrix();
+    trans(0, 3) = t[0];
+    trans(1, 3) = t[1];
+    trans(2, 3) = t[2];
+    trans(3, 3) = 1;
+
+    cv::Rect frame(0, 0, img.cols, img.rows);
+
+    int weight_count = 0;
+    for (auto pt : edge_cloud->points) {
+        Eigen::Vector4d cam_pt = trans * Eigen::Vector4d(pt.x, pt.y, pt.z, 1);
+        PointT pcl_cam_pt;
+        pcl_cam_pt.x = cam_pt(0);
+        pcl_cam_pt.y = cam_pt(1);
+        pcl_cam_pt.z = cam_pt(2);
+        if (pcl_cam_pt.z > 0) {
+            cv::Point cv_pt = project<PointT>(pcl_cam_pt, projection_matrix);
+	        if (cv_pt.inside(frame)) {
+                // std::cout<<cv_pt<<std::endl;
+	        	weight_count += img.at<unsigned char>(cv_pt);
+                // printf("%d %d %d\n", weight_count, cv_pt.x, cv_pt.y);
+            }
+        }
+    }
+    return weight_count;
+}
+
+float reproject_error_in_pixel(const std::vector<Eigen::Vector3d>& camera,
+        const std::vector<Eigen::Vector3d>& lidar,
+        const Eigen::Matrix4d& trans, const cv::Mat& projection_matrix);
+
+template <typename PointT>
+void greed_search_of_trans(const cv::Mat& img, const typename pcl::PointCloud<PointT>::Ptr& edge_cloud,
+        const cv::Mat projection_matrix, Eigen::Matrix4d* trans) {
+
+    Eigen::Matrix3d init_rot = trans->topLeftCorner(3, 3);
+	Eigen::Vector3d init_ypr = init_rot.eulerAngles(2, 1, 0);
+    Eigen::Vector3d init_t = trans->col(3).head(3);
+
+    double search_x = 0.05;  // m
+    double search_y = 0.05;
+    double search_z = 0.05;
+    double search_ro = 1.0;   // degree
+    double search_pi = 1.0;
+    double search_ya = 1.0;
+    double step_t = 0.01;
+    double step_rpy = 0.1;
+
+    int weight_count = 0;
+    double max_rpy[3];
+    double max_xyz[3];
+
+    int count = 0;
+    PERF_BLOCK_START();
+    for (double delt_x = -search_x; delt_x < search_x; delt_x += step_t) {
+        for (double delt_y = -search_y; delt_y < search_y; delt_y += step_t) {
+            for (double delt_z = -search_z; delt_z < search_z; delt_z += step_t) {
+                for (double delt_ro = -search_ro; delt_ro < search_ro; delt_ro += step_rpy) {
+                    for (double delt_pi = -search_pi; delt_pi < search_pi; delt_pi += step_rpy) {
+                        for (double delt_ya = -search_ya; delt_ya < search_ya; delt_ya += step_rpy) {
+                            double rpy[3] = {init_ypr(2) + delt_ro * M_PI / 180.,
+                                             init_ypr(1) + delt_pi * M_PI / 180.,
+                                             init_ypr(0) + delt_ya * M_PI / 180.};
+                            double t[3] = {init_t(0) + delt_x,
+                                           init_t(1) + delt_y,
+                                           init_t(2) + delt_z};
+//                             double t[3] = {init_t(0), init_t(1), init_t(2)};
+                            int temp_count = edge_weight_count<PointT>(img, edge_cloud, projection_matrix, rpy, t);
+                            if (count % 1000 == 0) {
+                                std::cout << "count: " << count << std::endl;
+                                std::cout << rpy[0] * 180. / M_PI << ", "
+                                          << rpy[1] * 180. / M_PI << ", "
+                                          << rpy[2] * 180. / M_PI << std::endl;
+                                PERF_BLOCK_END("refine_1000");
+                            }
+                            count++;
+                            if (temp_count > weight_count) {
+                                weight_count = temp_count;
+                                std::cout << "weight_count = " << weight_count << std::endl;
+                                max_rpy[0] = rpy[0]; max_rpy[1] = rpy[1]; max_rpy[2] = rpy[2];
+                                max_xyz[0] = t[0]; max_xyz[1] = t[1]; max_xyz[2] = t[2];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::cout << "refined rpy: " << max_rpy[0] * 180. / M_PI << ", "
+                                 << max_rpy[1] * 180. / M_PI << ", "
+                                 << max_rpy[2] * 180. / M_PI << std::endl;
+    std::cout << "refined xyz: " << max_xyz[0] << ", " << max_xyz[1] << ", " << max_xyz[2] << std::endl;
+
+    Eigen::Quaterniond q;
+    q = Eigen::AngleAxisd(max_rpy[2], Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(max_rpy[1], Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(max_rpy[0], Eigen::Vector3d::UnitX());
+    trans->topLeftCorner(3, 3) = q.matrix();
+    (*trans)(0, 3) = max_xyz[0];
+    (*trans)(1, 3) = max_xyz[1];
+    (*trans)(2, 3) = max_xyz[2];
+}
+
+void get_pixel_in_polygon(const cv::Mat& img, int polygon_num, cv::Mat& out_img);
+
+template <typename PointT>
+void ration_cloud(typename pcl::PointCloud<PointT>::Ptr& cloud, const Eigen::Matrix3d& rot_matrix) {
+    for (size_t i = 0; i < cloud->points.size(); ++i) {
+        PointT& pt = cloud->points[i];
+        Eigen::Vector3d v_pt = {pt.x, pt.y, pt.z};
+        v_pt = rot_matrix * v_pt;
+        pt.x = v_pt(0);
+        pt.y = v_pt(1);
+        pt.z = v_pt(2);
+    }
+}
+
+void greed_search_cu(int frames, int device_num, const unsigned char* img, const int* width,
+        const int* height, const float* pc, const int* nr_pc,
+        const float* pm, float* init_rpyxyz, float* search_rpyxyz, float* step_rt, float* best_rpyxyz);
+
+#endif // CAM_LIDAR_CALIB_UTILS_H

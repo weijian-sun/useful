@@ -1,0 +1,38 @@
+#include <cuda_runtime_api.h>
+/* #include <Eigen/Eigen> */
+/* #include <pcl/point_cloud.h> */
+
+// #include "utils.h"
+
+
+__global__ void search() {
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    printf("%d\n", index);
+    return;
+}
+void greed_search_cu(const unsigned char* img, int width, int height, const float* pc, int nr_pc, 
+        const float* pm, float* init_rpyxyz, float* search_rpyxyz, float* step_rt, float* best_rpyxyz) {
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    cudaError_t cuda_error;
+    int deviceCount = -1;
+    cuda_error = cudaGetDeviceCount(&deviceCount);
+    if (cuda_error != cudaSuccess) {printf("get GPU device count failed\n"); return;}
+    printf("deviceCount: %d \n", deviceCount);
+
+    cudaSetDevice(0);
+    cudaDeviceProp device_properties;
+    cuda_error = cudaGetDeviceProperties(&device_properties, 0);
+    if (cuda_error != cudaSuccess) {printf("get GPU device_properties failed\n"); return;}
+
+
+    int nblocks = 6553500;
+    printf("begin do search! nblocks: %d, device_properties.maxThreadsPerBlock: %d \n", nblocks, device_properties.maxThreadsPerBlock);
+    printf("device_properties.maxGridSize[0-2]: %d, %d %d\n", device_properties.maxGridSize[0], device_properties.maxGridSize[1], device_properties.maxGridSize[2]);
+    search<<<nblocks, device_properties.maxThreadsPerBlock>>> ();
+
+    cudaDeviceSynchronize();
+
+
+}
+

@@ -1,0 +1,69 @@
+/***************************************************************************
+ *
+ * Copyright (c) 2018 Alibaba-inc.com, Inc. All Rights Reserved
+ * $Id$
+ *
+ **************************************************************************/
+
+ /**
+ * @file image_process.h
+ * @author lifangzhen(fangzhen.lfz@alibaba-inc.com)
+ * @author Weijian Sun(weijian.swj@alibaba-inc.com)
+ **/
+
+#ifndef CAM_LIDAR_CALIB_IMAGE_PROCESS_H
+#define CAM_LIDAR_CALIB_IMAGE_PROCESS_H
+
+#include <string>
+#include <vector>
+#include <map>
+#include <unordered_map>
+
+#include <Eigen/Eigen>
+#include <opencv2/core/eigen.hpp>
+#include <opencv2/opencv.hpp>
+
+#include <aruco/aruco.h>
+
+#include "lidar_cam_calib/proto/calib_param.pb.h"
+
+namespace calib {
+
+class ImageProcess {
+public:
+    ImageProcess() {};
+    ~ImageProcess() {};
+
+    bool Init(const calib::LidarCameraCalibParam & calib_param);
+
+    cv::Mat get_camera_projection_matrix();
+
+    bool edge_filter(const cv::Mat& img, cv::Mat* out_img);
+
+
+private:
+std::string params_file;
+
+private:
+
+    bool compute_edge(const cv::Mat& img, cv::Mat* edge_img);
+
+    bool inverse_distance_transform(const cv::Mat& img, cv::Mat* idt_img);
+
+
+private:
+    // hadutils::hadLCM lcm_;
+
+    cv::Mat img_;
+    aruco::CameraParameters camera_;
+
+    float param_a_; //inverse trans
+    float param_r_; //inverse trans
+
+    calib::LidarCameraCalibParam calib_param_;
+};
+
+
+} // namespace calib
+
+#endif  // CAM_LIDAR_CALIB_IMAGE_PROCESS_H

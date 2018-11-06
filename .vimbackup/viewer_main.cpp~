@@ -1,0 +1,132 @@
+/***************************************************************************
+ *
+ * Copyright (c) 2018 Alibaba-inc.com, Inc. All Rights Reserved
+ * $Id$
+ *
+ **************************************************************************/
+
+ /**
+ * @file calib_main.cpp
+ * @author lifangzhen(fangzhen.lfz@alibaba-inc.com)
+ * @author Weijian Sun(weijian.swj@alibaba-inc.com)
+ *
+ **/
+
+#include <iostream>
+#include <sstream>
+#include <fstream>
+#include <Eigen/Eigen>
+#include <Eigen/LU>
+#include <google/protobuf/text_format.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <pcl/io/pcd_io.h>
+
+#include "lidar_cam_calib/proto/calib_param.pb.h"
+#include "lidar_cam_calib/image_process.h"
+#include "lidar_cam_calib/utils.h"
+#include "common/common.h"
+
+
+#define USING_OPENMP
+
+using hadutils::PCLVelodyne;
+
+void load_text_proto_message_file(const std::string& path,
+                                  google::protobuf::Message& msg) {
+    int fd = open(path.c_str(), O_RDONLY);
+    PCHECK(fd >= 0) << "path[" << path << "]";
+    google::protobuf::io::FileInputStream file_in(fd);
+    CHECK(google::protobuf::TextFormat::Parse(&file_in, &msg)) << "path[" << path << "]";
+    PCHECK(0 == close(fd));
+}
+
+//------------- point cloud utils ---------------//
+pcl::PointCloud<pcl::PointXYZ>::Ptr toPointsXYZ(const pcl::PointCloud<hadutils::PCLVelodyne>::Ptr cloud) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr new_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+    for (auto pt = cloud->points.begin(); pt < cloud->points.end(); pt++) {
+        new_cloud->push_back(pcl::PointXYZ(pt->x, pt->y, pt->z));
+    }
+    return new_cloud;
+}
+
+
+int main(int argc, char** argv) {
+
+
+    std::string params_file = argv[1];
+    std::cout << "params_file: " << params_file << std::endl;
+
+    calib::LidarCameraCalibParam lidar_camera_calib_param;
+    load_text_proto_message_file(params_file, lidar_camera_calib_param);
+    auto calib_param = lidar_camera_calib_param.viewer_param();
+    auto param_commom = lidar_camera_calib_param.common_param();
+
+
+    Eigen::Quaterniond qCameraToLidar;
+    qCameraToLidar=  Eigen::AngleAxisd(calib_param.initial_z_rot() * M_PI / 180., Eigen::Vector3d::UnitZ()) *
+                     Eigen::AngleAxisd(calib_param.initial_y_rot() * M_PI / 180., Eigen::Vector3d::UnitY()) *
+                     Eigen::AngleAxisd(calib_param.initial_x_rot() * M_PI / 180., Eigen::Vector3d::UnitX());
+
+    Eigen::Matrix3d inital_CamearToLidar = qCameraToLidar.matrix();
+    Eigen::Matrix4d inital_CamearToLidar_transmatrix = Eigen::Matrix4d::Identity();
+    inital_CamearToLidar_transmatrix.topLeftCorner(3, 3) = inital_CamearToLidar;
+    inital_CamearToLidar_transmatrix(0, 3) = calib_param.initial_x();
+    inital_CamearToLidar_transmatrix(1, 3) = calib_param.initial_y();
+    inital_CamearToLidar_transmatrix(2, 3) = calib_param.initial_z();
+
+    Eigen::Matrix4d lid2cam = inital_CamearToLidar_transmatrix.inverse();
+
+
+
+    std::cout << "inital_CamearToLidar_transmatrix = " << inital_CamearToLidar_transmatrix<< std::endl;
+
+
+    calib::ImageProcess image_process;
+    image_process.Init(lidar_camera_calib_param);
+
+    std::string pcd_file = argv[2];
+    std::string img_file = argv[3];
+
+    // std::string pcd_file = calib_param.pcd_file();
+    // std::string img_file = calib_param.img_file();
+
+
+    pcl::PointCloud<PCLVelodyne>::Ptr cloud(new pcl::PointCloud<PCLVelodyne>);
+    pcl::io::loadPCDFile(pcd_file, *cloud);
+
+
+    cv::Mat img = cv::imread(img_file);
+    cv::Mat idt_img = cv::Mat(img.size(), CV_8UC1);
+    image_process.edge_filter(img, &idt_img);
+    std::vector<cv::Mat> rgb_idt_channels;
+    rgb_idt_channels.push_back(cv::Mat::zeros(idt_img.size(), CV_8UC1));
+    rgb_idt_channels.push_back(cv::Mat::zeros(idt_img.size(), CV_8UC1));
+    rgb_idt_channels.push_back(idt_img);
+    cv::Mat rgb_idt_img;
+    cv::merge(rgb_idt_channels, rgb_idt_img);
+
+
+    ////////////////////
+    // cv::Mat gray_image, edge;
+    // cv::cvtColor(img, gray_image, CV_BGR2GRAY);
+    // cv::blur(gray_image, edge, cv::Size(3, 3));
+    // cv::Canny(edge, edge, 30, 90, 3);
+    // cv::namedWindow("rgb_idt_img", cv::WINDOW_NORMAL);
+    // cv::imshow("rgb_idt_img", edge);calib_param.img_file();
+    // cv::waitKey(0);
+
+    std::cout<<"cam: "<<std::endl;
+    cv::Mat camera_projection_matrix = image_process.get_camera_projection_matrix();
+
+    transform<hadutils::PCLVelodyne>(lid2cam, cloud);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr t_cloud = toPointsXYZ(cloud);
+    cv::Mat show_t_img = project<pcl::PointXYZ>(camera_projection_matrix, t_cloud, img, 0, 0, 0);
+
+    cv::namedWindow("t_cloud", cv::WINDOW_NORMAL);
+    cv::imshow("t_cloud", show_t_img);
+    cv::waitKey(0);
+
+
+    return 0;
+}
+

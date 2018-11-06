@@ -1,0 +1,40 @@
+#include"perception/cam_lidar_calib/3d_3d_calib/cube_edge.h"
+
+
+int main()
+{
+    std::string path = "/home/weijian/source-dev/had-perception/modules/build/bin/LidarCameraCalib_3DTo3D.prototxt";
+
+    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> lines;
+
+    calib::CubeEdgeProcess Cube_Edge(path, false);
+    Cube_Edge.find_cube_edge(&lines, true, true);
+
+    std::cout<<"**************************"<<std::endl;
+    std::cout<<lines.size()<<std::endl;
+
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+
+    for(auto line:lines)
+    {
+        for(auto p:line->points)
+        cloud->points.push_back(p);
+    }
+
+    cloud->width = 1;
+    cloud->height = cloud->points.size();
+    pcl::io::savePCDFileASCII("10.pcd", *cloud);
+
+
+
+
+    // boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer;
+    // viewer = calib::simpleVis(cloud);
+    // while (!viewer->wasStopped())
+    // {
+    //     viewer->spinOnce (100);
+    //     boost::this_thread::sleep (boost::posix_time::microseconds (100000));
+    // }
+    return 0;
+}

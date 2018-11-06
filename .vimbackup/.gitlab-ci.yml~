@@ -1,0 +1,44 @@
+before_script:
+  - export CCACHE_BASEDIR=${HOME}
+  - export CCACHE_DIR=${HOME}/ccache
+
+  - git config --global user.email "qieyu.ch@alibaba-inc.com"
+  - git config --global user.name "XLAB-HAD-CI"
+
+cache:
+  paths:
+    - $HOME/ccache/
+
+stages:
+  - build
+
+run-build:
+  stage: build
+  only:
+    - master
+    - dev
+    - /^mr-.*$/
+  script:
+    - export had_root_default=$CI_PROJECT_DIR
+    - rm -rf build
+    - cd $CI_PROJECT_DIR && mkdir build && cd build && cmake .. && make -j8 install
+
+    # "upload"
+    #
+    - had_proj_name="had-perception-calib"
+    - export had_root_default=$CI_PROJECT_DIR
+    - source ~/.bashrc-oss
+
+    - TAR_FILENAME="${had_proj_name}-pkg.tar.gz"
+    - PKG_DIR="$CI_PROJECT_DIR/${had_proj_name}-pkg"
+
+    - cd $CI_PROJECT_DIR && mkdir -p $PKG_DIR && rm -rf $PKG_DIR/*
+    - cp -r build/install/*   $PKG_DIR/
+    - cp -r production/params   $PKG_DIR/
+
+    - cd $CI_PROJECT_DIR && tar -czf "$TAR_FILENAME" ${had_proj_name}-pkg
+    - OSS_RES_KEY="${had_proj_name}/$CI_BUILD_REF/$TAR_FILENAME"
+
+    - cd $CI_PROJECT_DIR/scripts
+    - python upload-artifacts.py $OSS_RES_KEY "$CI_PROJECT_DIR/$TAR_FILENAME"
+    - python update-branch-head-oss.py $CI_BUILD_REF_NAME $CI_BUILD_REF had-perception-calib

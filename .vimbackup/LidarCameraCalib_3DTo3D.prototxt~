@@ -1,0 +1,63 @@
+# " vim set ft = conf
+common_param{
+
+    camera_model_file: './CAM.yml'
+    # data_prefix: './C09_11_04/b0_data/C09_11_04'
+    data_prefix: 'A06_10_23'
+    channel: 'F0'
+
+## greedy search
+    device_num: 0
+    show_project: true
+    frames: 3
+
+## benckmark setting
+    line_num: 10
+    show_pcd: false;
+}
+
+
+search_low_pre{
+    search_x_r: 5
+    search_y_r: 5
+    search_z_r: 5
+    search_x: 1
+    search_y: 1
+    search_z: 1
+    step_r: 0.2
+    step_t: 0.05
+}
+
+
+
+viewer_param{
+    initial_x_rot: 88.8
+    initial_y_rot: 0.15
+    initial_z_rot: 92.55
+    initial_x: 0.25
+    initial_y: -0.09
+    initial_z: -0.51
+
+
+# F0
+    # initial_x_rot: 86.45
+    # initial_y_rot: -179.95
+    # initial_z_rot: 91.6
+    # initial_x: 0.354699
+    # initial_y: 0.219708
+    # initial_z: -0.323137
+#B0
+    # initial_x_rot: -91.55
+    # initial_y_rot: 0.55
+    # initial_z_rot: 93.8
+    # initial_x: -0.450635
+    # initial_y: -0.0231067
+    # initial_z: -0.332406
+    
+    # initial_x_rot: 178.359
+    # initial_y_rot: 179.
+    # initial_z_rot: 93.8
+    # initial_x: -0.450635
+    # initial_y: -0.0231067
+    # initial_z: -0.332406
+}

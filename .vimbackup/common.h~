@@ -1,0 +1,170 @@
+#pragma once
+
+#ifdef OPENMP_FOUND
+#include <omp.h>
+#endif
+
+#include <algorithm>
+#include <iostream>
+#include <fstream>
+#include <random>
+#include <map>
+#include <unordered_map>
+#include <string>
+#include <vector>
+#include <utility>
+#include <cstdio>
+#include <cstdint>
+#include <cfloat>
+#include <fcntl.h>
+#include <chrono>
+#include <ctime>
+#include <queue>
+#include <math.h>
+
+#include <assert.h>
+#include <signal.h>
+#include <pthread.h>
+#include <sched.h>
+#include <sys/time.h>
+
+#include <boost/smart_ptr.hpp>
+#include <boost/make_shared.hpp>
+#include <boost/filesystem.hpp>
+#include <boost/lexical_cast.hpp>
+#include <boost/algorithm/string.hpp>
+#include <boost/utility.hpp>
+#include <boost/circular_buffer.hpp>
+#include <boost/thread/mutex.hpp>
+#include <boost/thread/locks.hpp>
+#include <boost/thread/shared_mutex.hpp>
+
+#include <glog/logging.h>
+#include <google/protobuf/text_format.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <opencv2/opencv.hpp>
+#include <Eigen/Eigen>
+
+// #include <lidar_cam_calib/proto/perception_common_param.pb.h>
+
+// #include "factory.h"
+// #include "singleton.h"
+#include "timer.h"
+#include "perf.h"
+// #include "lcm_wrapper.h"
+// #include "define.h"
+// #include "mutex.h"
+// #include "concurrent_queue.h"
+// #include "config_manager.h"
+// #include "type.h"
+
+
+
+namespace calib {
+
+namespace fs = boost::filesystem;
+
+static inline bool load_text_proto_file(const std::string& path,
+                                        google::protobuf::Message& msg) {
+    int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        return false;
+    }
+    google::protobuf::io::FileInputStream file_in(fd);
+    if (!google::protobuf::TextFormat::Parse(&file_in, &msg)) {
+        return false;
+    }
+    close(fd);
+    return true;
+}
+
+static inline fs::path get_had_path(const std::string& filepath) {
+    const static char* had_env = ::getenv("HAD");
+    fs::path p(filepath);
+    if (!fs::exists(p)) {
+        CHECK(had_env) << "${HAD} not set";
+        fs::path had_dir(had_env);
+        p = had_dir / p;
+    }
+    return p;
+}
+
+// static inline bool get_had_path(const fs::path& filepath, fs::path* ret) {
+//     const static char* had_env = ::getenv("HAD");
+//     *ret = fs::path(filepath);
+//     if (!fs::exists(*ret)) {
+//         if (!had_env) {
+//             return false;
+//         }
+//         fs::path had_dir(had_env);
+//         *ret = had_dir / *ret;
+//     }
+//     return fs::exists(*ret);
+// }
+//
+// static inline bool get_production_path(const fs::path& filepath, fs::path* ret) {
+//     const ConfigManager* config_ = Singleton<ConfigManager>::get();
+//     *ret = fs::path(filepath);
+//     if (!fs::exists(*ret)) {
+//         fs::path prod_dir(config_->production_dir());
+//         *ret = prod_dir / *ret;
+//     }
+//     return fs::exists(*ret);
+// }
+
+// Try in order:
+// 1. ./
+// 2. ${HAD}/build_dist/production/
+// 3. ${HAD}/build/modules/production/
+// static inline bool get_default_production_file(const std::string& relpath,
+//                                                fs::path* filepath,
+//                                                fs::path* prod_dir) {
+//     *prod_dir = fs::path(".");
+//     *filepath = *prod_dir / relpath;
+//     if (fs::exists(*filepath)) {
+//         return true;
+//     }
+//     *prod_dir = get_had_path("build_dist");
+//     if (!get_had_path(*prod_dir / relpath, filepath)) {
+//         *prod_dir = get_had_path("build/modules");
+//         LOG(INFO) << filepath->string() << " does not exists. trying "
+//                   << prod_dir->string() << "/" << relpath << "...";
+//         if (!get_had_path(*prod_dir / relpath, filepath)) {
+//             return false;
+//         }
+//     }
+//     return true;
+// }
+//
+// static inline std::vector<fs::path> readdir(const fs::path& dir_path) {
+//     CHECK(fs::exists(dir_path))
+//             << dir_path << " does not exists";
+//     std::vector<fs::path> ret;
+//     std::transform(fs::directory_iterator(dir_path), fs::directory_iterator(),
+//                    std::back_inserter(ret), [] (const fs::directory_entry& entry) {
+//                                                        return entry.path();
+//                                                    });
+//     std::sort(ret.begin(), ret.end(), [] (const fs::path& a, const fs::path& b) {
+//                                                         return a.string() < b.string();
+//                                                     });
+//     return ret;
+// }
+// static inline std::vector<fs::path> readdir(const std::string& dir) {
+//     return readdir(fs::path(dir));
+// }
+//
+// // get the current time by second, precision is microsecond
+// inline double get_current_time() {
+//     struct timeval tv;
+//     gettimeofday(&tv, nullptr); const double timestamp = tv.tv_sec * 1000000 + tv.tv_usec; return timestamp / 1000000; }
+//
+// inline void print_array(double* array, size_t len) {
+//     std::ostringstream oss;
+//     for (size_t i = 0; i < len - 1; ++i) {
+//         oss << array[i] << ", ";
+//     }
+//     oss << array[len - 1];
+//     LOG(INFO) << oss.str();
+// }
+
+}

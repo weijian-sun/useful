@@ -1,0 +1,84 @@
+#include "lcmtypes/had/pointcloud_t.hpp"
+#include "lcmtypes/had/image_t.hpp"
+#include <lcmtypes/had/camera_sched_mode_t.hpp>
+#include <lcmtypes/had/camera_sched_t.hpp>
+#include <lcmtypes/had/cameras_sched_t.hpp>
+#include <utilities/image/ImageDecoder.h>
+#include "drivers/velodyne/pcl_point_types.h"
+#include "drivers/velodyne/pc_type_translator.hpp"
+#include <lcm/lcm-cpp.hpp>
+#include <utilities/hadparam.h>
+#include <utilities/hadtrans.h>
+#include "perception/common/camera_proj/camera_proj.hpp"
+#include <opencv2/opencv.hpp>
+#include <pcl/io/pcd_io.h>
+
+hadutils::hadLCM g_lcm;
+hadutils::hadparam_t g_param(g_lcm.getUnderlyingLCM());
+hadutils::hadtrans_t g_trans(g_lcm.getUnderlyingLCM(), &g_param);
+
+class Handler
+{
+public:
+    void onLidar(const lcm::ReceiveBuffer*, const std::string&, const had::pointcloud_t *pc)
+    {
+        pcl::PointCloud<PCLVelodyne> pcv;
+        // toPCLVelodyne(*pc, pcv);
+        pcl::io::loadPCDFile("/home/weijian/out.pcd", pcv);
+
+        std::vector<cv::Point3f> pts;
+        for(const auto &pt : pcv.points)
+        {
+            if(pt.y < 0)
+                pts.emplace_back(pt.x, pt.y, pt.z);
+        }
+
+        // std::vector<cv::Point3d> pts_proj;
+        // had::perception::CameraProj::project(&g_lcm, &g_param, &g_trans, "Pandora_lidar", "Pandora_front_color", 0, pts, pts_proj);
+
+        cv::Mat rvec = (cv::Mat_<double>(3, 1) << 0.052496, -2.218505, 2.181426);
+        cv::Mat tvec = (cv::Mat_<double>(3, 1) << -0.004362, -0.128057, 0.090203);
+        cv::Mat K = (cv::Mat_<double>(3, 3) << 1517.669231, 0.000000, 603.153334,
+                                                0.000000, 1504.731426, 346.130464,
+                                                0.000000, 0.000000, 1.000000);
+        cv::Mat D = (cv::Mat_<double>(5, 1) << 0, 0, 0, 0, 0);
+        std::vector<cv::Point2f> pts_proj;
+        cv::projectPoints(pts, rvec, tvec, K, D, pts_proj);
+
+        // cv::Mat img = cv::imread("/home/weijian/source-dev/had-perception/modules/build/bin/pandar_test.jpg");
+        cv::Mat img;
+        ImageDecoder::decode(image, img, true);
+        img.rows = image.height;
+        img.cols = image.width;
+        cv::imwrite("out.jpg", img);
+        for(const auto &pt : pts_proj)
+        {
+            if(pt.x > image.width || pt.y < 0 || pt.y > image.height)
+                continue;
+            cv::circle(img, cv::Point(pt.x, pt.y), 1, cv::Scalar(0, 255, 0), -1);
+        }
+        cv::imshow("proj", img);
+        cv::waitKey(1);
+    }
+
+    void onImage(const lcm::ReceiveBuffer*, const std::string&, const had::image_t *img)
+    {
+        printf("on image\n");
+        image = *img;
+    }
+
+protected:
+    had::image_t image;
+};
+
+int main()
+{
+    Handler handler;
+    g_lcm.subscribe("Pandora_lidar", &Handler::onLidar, &handler);
+    g_lcm.subscribe("Pandora_front_color", &Handler::onImage, &handler);
+
+    while(g_lcm.handle() == 0)
+        ;
+
+    return 0;
+}

@@ -1,0 +1,42 @@
+#ifndef CAM_LIDAR_CALIB_FIND_RT_H
+#define CAM_LIDAR_CALIB_FIND_RT_H
+
+#include <cstdlib>
+#include <cstdio>
+#include <math.h>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <sstream>
+#include <utility>
+
+#include <Eigen/Dense>
+#include <Eigen/SVD>
+#include <Eigen/Geometry>
+#include <unsupported/Eigen/MatrixFunctions>
+
+#include "lidar_cam_calib/proto/calib_param.pb.h"
+#include "lidar_cam_calib/utils.h"
+
+bool compare(const Eigen::Matrix4d& mx1, const Eigen::Matrix4d& mx2);
+
+Eigen::Quaterniond addQ(Eigen::Quaterniond a, Eigen::Quaterniond b);
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd> readArray();
+
+// calculates rotation and translation that transforms points in the lidar frame to the camera frame
+//Matrix4d calc_RT(MatrixXd lidar, MatrixXd camera, Eigen::Matrix3d lidarToCamera)
+Eigen::Matrix4d calc_RT(const std::vector<Eigen::Vector3d>& lidar, const std::vector<Eigen::Vector3d>& camera,
+                 const Eigen::Matrix3d& lidarToCamera, const cv::Mat& projection_matrix);
+
+void readArucoPose(std::vector<float> marker_info, int num_of_marker,
+                   const calib::ThreeD2ThreeDCalibParam& calib_param,
+                   std::vector<Eigen::Vector3d>* points);
+
+Eigen::Matrix4d find_transformation(std::vector<float> marker_info, int num_of_marker,
+                         Eigen::Matrix3d lidarToCamera,
+                         const std::vector<Eigen::Vector3d>& lidar_points,
+                         const calib::ThreeD2ThreeDCalibParam& calib_param,
+                         const cv::Mat& projection_matrix);
+
+#endif // CAM_LIDAR_CALIB_FIND_RT_H
